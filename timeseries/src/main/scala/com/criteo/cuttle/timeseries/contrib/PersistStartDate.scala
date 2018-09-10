@@ -4,9 +4,10 @@ import doobie.implicits._
 import com.criteo.cuttle._
 import java.time._
 
+//TODO
 class PersistInstant(xa: XA) {
   def set(id: String, t: Instant): Instant = {
-    sql"REPLACE INTO instant_data VALUES (${id}, ${t})"
+    sql"INSERT INTO instant_data VALUES (${id}, ${t})"
       .update.run.transact(xa).unsafeRunSync
     t
   }
@@ -23,7 +24,7 @@ object PersistInstant {
         id        VARCHAR(1000) NOT NULL,
         instant   DATETIME NOT NULL,
         PRIMARY KEY (id)
-      ) ENGINE = INNODB
+      )
     """.update.run
   )
 

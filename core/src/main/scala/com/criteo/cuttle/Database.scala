@@ -17,6 +17,7 @@ import java.util.concurrent.{Executors, TimeUnit}
 
 import ExecutionStatus._
 import com.criteo.cuttle.events.{Event, JobSuccessForced}
+import doobie.free.connection.ConnectionIO
 
 /** Configuration of JDBC endpoint.
   *
@@ -48,7 +49,7 @@ object DatabaseConfig {
         def env(variable: String, default: Option[String] = None) =
             Option(System.getenv(variable)).orElse(default).getOrElse(sys.error(s"Missing env ${'$' + variable}"))
 
-        val dbLocations = env("MYSQL_LOCATIONS", Some("localhost:5432"))
+        val dbLocations = env("CUTTLE_PG_URI", Some("localhost:5432"))
             .split(',')
             .flatMap(_.split(":") match {
                 case Array(host, port) => Try(DBLocation(host, port.toInt)).toOption
@@ -57,9 +58,9 @@ object DatabaseConfig {
 
         DatabaseConfig(
             if (dbLocations.nonEmpty) dbLocations else Seq(DBLocation("localhost", 5432)),
-            env("MYSQL_DATABASE"),
-            env("MYSQL_USERNAME"),
-            env("MYSQL_PASSWORD")
+            env("CUTTLE_PG_DATABASE"),
+            env("CUTTLE_PG_USERNAME"),
+            env("CUTTLE_PG_PASSWORD")
         )
     }
 }
@@ -129,6 +130,11 @@ private[cuttle] object Database {
     """.update.run
     )
 
+    def withoutTransaction[A](p: ConnectionIO[A]): ConnectionIO[A] =
+        FC.setAutoCommit(true) *> p <* FC.setAutoCommit(false)
+
+
+
     private def lockedTransactor(xa: HikariTransactor[IO]): HikariTransactor[IO] = {
         val guid = java.util.UUID.randomUUID.toString
 
@@ -170,6 +176,7 @@ private[cuttle] object Database {
                         if ((sql"""
             UPDATE locks SET locked_at = current_timestamp WHERE locked_by = ${guid}
           """.update.run.transact(xa).unsafeRunSync: Int) != 1) {
+
                             xa.shutdown.unsafeRunSync
                             sys.error(s"Lock has been lost, shutting down the database connection.")
                         }
