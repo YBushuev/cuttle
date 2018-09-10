@@ -8,7 +8,7 @@ val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.na
 
 
 lazy val commonSettings = Seq(
-  organization := "com.criteo.cuttle",
+  organization := "com.naumen.sibi.cuttle",
   version := VERSION,
   scalaVersion := "2.12.6",
   scalacOptions ++= Seq(
@@ -139,7 +139,7 @@ lazy val commonSettings = Seq(
   },
   // Run an example in another JVM, and quit on key press
   commands += Command.single("example") { (state, arg) =>
-    s"examples/test:runMain com.criteo.cuttle.examples.TestExample $arg" :: state
+    s"examples/test:runMain com.naumen.sibi..cuttle.examples.TestExample $arg" :: state
   }
 )
 
