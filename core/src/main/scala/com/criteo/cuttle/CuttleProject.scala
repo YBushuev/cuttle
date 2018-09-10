@@ -27,12 +27,14 @@ class CuttleProject[S <: Scheduling] private[cuttle] (
     * an HTTP server providing an Web UI and a JSON API.
     *
     * @param platforms The configured [[ExecutionPlatform ExecutionPlatforms]] to use to execute jobs.
+    * @param host The host to use for the HTTP daemon.
     * @param httpPort The port to use for the HTTP daemon.
-    * @param databaseConfig JDBC configuration for MySQL server 5.7.
+    * @param databaseConfig JDBC configuration
     * @param retryStrategy The strategy to use for execution retry. Default to exponential backoff.
     */
   def start(
     platforms: Seq[ExecutionPlatform] = CuttleProject.defaultPlatforms,
+    host: String = "localhost",
     httpPort: Int = 8888,
     databaseConfig: DatabaseConfig = DatabaseConfig.fromEnv,
     retryStrategy: RetryStrategy = RetryStrategy.ExponentialBackoffRetryStrategy,
@@ -50,19 +52,19 @@ class CuttleProject[S <: Scheduling] private[cuttle] (
     scheduler.start(workflow, executor, xa, logger)
 
     logger.info("Start server")
-    Server.listen(port = httpPort, onError = { e =>
+    Server.listen(port = httpPort, address = host , onError = { e =>
       e.printStackTrace()
       InternalServerError(e.getMessage)
     })(App(this, executor, xa).routes)
 
-    logger.info(s"Listening on http://localhost:$httpPort")
+    logger.info(s"Listening on http://$host:$httpPort")
   }
 
   /**
     * Connect to database and build routes. It allows you to start externally a server and decide when to start the scheduling.
     *
     * @param platforms The configured [[ExecutionPlatform ExecutionPlatforms]] to use to execute jobs.
-    * @param databaseConfig JDBC configuration for MySQL server 5.7.
+    * @param databaseConfig JDBC configuration
     * @param retryStrategy The strategy to use for execution retry. Default to exponential backoff.
     *
     * @return a tuple with cuttleRoutes (needed to start a server) and a function to start the scheduler

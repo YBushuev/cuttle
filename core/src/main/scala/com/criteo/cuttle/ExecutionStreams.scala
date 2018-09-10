@@ -81,8 +81,7 @@ private[cuttle] object ExecutionStreams {
     def go(alreadySent: Int = 0): fs2.Stream[IO, Byte] =
       fs2.Stream.eval(IO { streamsAsString(id) }).flatMap {
         case Some(content) =>
-          fs2.Stream.chunk(fs2.Chunk.bytes(content.drop(alreadySent).getBytes("utf8"))) ++ SC.delay(go(content.length),
-                                                                                                    1 second)
+          fs2.Stream.chunk(fs2.Chunk.bytes(content.drop(alreadySent).getBytes("utf8"))) ++ SC.delay(go(content.length),1 second)
         case None =>
           fs2.Stream
             .eval(

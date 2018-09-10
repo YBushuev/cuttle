@@ -8,10 +8,10 @@ object TestExample {
     val exampleJVM =
       new ProcessBuilder("java", "-cp", System.getProperty("java.class.path"), s"com.criteo.cuttle.examples.$example")
 
-    exampleJVM.environment.put("MYSQL_LOCATIONS", "localhost:3388")
-    exampleJVM.environment.put("MYSQL_DATABASE", "cuttle_dev")
-    exampleJVM.environment.put("MYSQL_USERNAME", "root")
-    exampleJVM.environment.put("MYSQL_PASSWORD", "")
+    exampleJVM.environment.put("MYSQL_LOCATIONS", "psql2.gp.naumen.ru:3388")
+    exampleJVM.environment.put("MYSQL_DATABASE", "cuttle_it_test")
+    exampleJVM.environment.put("MYSQL_USERNAME", "cuttle")
+    exampleJVM.environment.put("MYSQL_PASSWORD", "cuttle")
 
     val forked = exampleJVM.inheritIO.start()
 
