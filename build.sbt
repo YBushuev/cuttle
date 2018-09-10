@@ -1,7 +1,11 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.3.16"
+val VERSION = "0.3.16-postgres-SNAPSHOT"
+
+val mavenRelease = MavenRepository("maven-releases", "https://nexus.ism-dev.naumen.ru/repository/maven-releases/")
+val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.naumen.ru/repository/maven-snapshots/")
+
 
 lazy val commonSettings = Seq(
   organization := "com.criteo.cuttle",
@@ -37,15 +41,15 @@ lazy val commonSettings = Seq(
   // Maven config
   credentials += Credentials(
     "Sonatype Nexus Repository Manager",
-    "oss.sonatype.org",
-    "criteo-oss",
+    "nexus.ism-dev.naumen.ru",
+    "publish",
     sys.env.getOrElse("SONATYPE_PASSWORD", "")
   ),
   publishTo := Some(
-    if (isSnapshot.value)
-      Opts.resolver.sonatypeSnapshots
+    if (version.value.endsWith("SNAPSHOT"))
+      mavenSnapshot
     else
-      Opts.resolver.sonatypeStaging
+      mavenRelease
   ),
   pgpPassphrase := sys.env.get("SONATYPE_PASSWORD").map(_.toArray),
   pgpSecretRing := file(".travis/secring.gpg"),
