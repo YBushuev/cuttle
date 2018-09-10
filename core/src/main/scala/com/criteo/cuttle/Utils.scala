@@ -35,9 +35,9 @@ package object utils {
       _ <- Fragment.const(s"""
         CREATE TABLE IF NOT EXISTS ${table} (
           schema_version  SMALLINT NOT NULL,
-          schema_update   DATETIME NOT NULL,
+          schema_update   TIMESTAMP NOT NULL,
           PRIMARY KEY     (schema_version)
-        ) ENGINE = INNODB;
+        );
       """).update.run
 
       currentSchemaVersion <- Fragment.const(s"""

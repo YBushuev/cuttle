@@ -1,16 +1,13 @@
 package com.criteo.cuttle
 
-import java.sql.{Connection, ResultSet}
+import java.sql.{Connection, PreparedStatement, ResultSet}
 
 import scala.concurrent.Future
-
 import cats.effect.IO
-import com.mysql.cj.jdbc.PreparedStatement
 import doobie.util.transactor.Transactor
 import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.FunSuite
-
 import com.criteo.cuttle.ExecutionContexts.Implicits.sideEffectExecutionContext
 import com.criteo.cuttle.ExecutionContexts._
 import com.criteo.cuttle.Metrics.Prometheus
