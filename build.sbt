@@ -6,8 +6,7 @@ val VERSION = "0.3.16"
 lazy val commonSettings = Seq(
   organization := "com.criteo.cuttle",
   version := VERSION,
-  scalaVersion := "2.11.11",
-  crossScalaVersions := Seq("2.11.11", "2.12.3"),
+  scalaVersion := "2.12.6",
   scalacOptions ++= Seq(
     "-deprecation",
     "-encoding",
@@ -163,12 +162,12 @@ lazy val localdb = {
     .settings(
       publishArtifact := false,
       libraryDependencies ++= Seq(
-        "com.wix" % "wix-embedded-mysql" % "2.1.4"
+        "com.wix" % "wix-embedded-mysql" % "4.1.2"
       )
     )
 }
 
-val doobieVersion = "0.5.0"
+val doobieVersion = "0.5.3"
 
 lazy val cuttle =
   (project in file("core"))
@@ -180,27 +179,28 @@ lazy val cuttle =
         "com.criteo.lolhttp" %% "lolhttp",
         "com.criteo.lolhttp" %% "loljson",
         "com.criteo.lolhttp" %% "lolhtml"
-      ).map(_ % "0.9.3"),
+      ).map(_ % "10.0.0"),
       libraryDependencies ++= Seq("core", "generic", "parser", "java8")
-        .map(module => "io.circe" %% s"circe-${module}" % "0.9.1"),
+        .map(module => "io.circe" %% s"circe-${module}" % "0.9.3"),
       libraryDependencies ++= Seq(
         "de.sciss" %% "fingertree" % "1.5.2",
         "org.scala-stm" %% "scala-stm" % "0.8",
         "org.scala-lang" % "scala-reflect" % scalaVersion.value,
-        "org.typelevel" %% "cats-core" % "1.0.1",
-        "org.typelevel" %% "cats-mtl-core" % "0.2.3",
+        "org.typelevel" %% "cats-core" % "1.3.1",
+        "org.typelevel" %% "cats-mtl-core" % "0.3.0",
         "codes.reactive" %% "scala-time" % "0.4.1",
-        "com.zaxxer" % "nuprocess" % "1.1.0"
+        "com.zaxxer" % "nuprocess" % "1.2.4"
       ),
       libraryDependencies ++= Seq(
         "org.tpolecat" %% "doobie-core",
-        "org.tpolecat" %% "doobie-hikari"
+        "org.tpolecat" %% "doobie-hikari",
+        "org.tpolecat" %% "doobie-postgres"
       ).map(_ % doobieVersion),
       libraryDependencies ++= Seq(
-        "mysql" % "mysql-connector-java" % "6.0.6"
+        "mysql" % "mysql-connector-java" % "8.0.12"
       ),
       libraryDependencies ++= Seq(
-        "org.scalatest" %% "scalatest" % "3.0.1",
+        "org.scalatest" %% "scalatest" % "3.0.5",
         "org.mockito" % "mockito-all" % "1.10.19",
         "org.tpolecat" %% "doobie-scalatest" % doobieVersion
       ).map(_ % "it,test"),

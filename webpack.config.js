@@ -4,7 +4,7 @@ const FlowStatusWebpackPlugin = require("flow-status-webpack-plugin");
 
 const outputPath = path.resolve(
   __dirname,
-  "core/target/scala-2.11/classes/public"
+  "core/target/scala-2.12/classes/public"
 );
 
 module.exports = {

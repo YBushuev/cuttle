@@ -37,11 +37,11 @@ let server = runServer({
   httpPort: 8888,
   sh: "java -cp `cat /tmp/classpath_com.criteo.cuttle.examples` com.criteo.cuttle.examples.HelloWorld",
   env: {
-    MYSQL_LOCATIONS: "localhost:3388",
-    MYSQL_DATABASE: "cuttle_dev",
-    MYSQL_USERNAME: "root",
-    MYSQL_PASSWORD: ""
+    MYSQL_LOCATIONS: "psql2.gp.naumen.ru:5432",
+    MYSQL_DATABASE: "ybushuev_cuttle",
+    MYSQL_USERNAME: "cuttle",
+    MYSQL_PASSWORD: "cuttle"
   }
-}).dependsOn(compile, generateClasspath, database);
+}).dependsOn(compile, generateClasspath);
 
 proxy(server, 8080).dependsOn(front);
