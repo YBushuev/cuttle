@@ -1,7 +1,7 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.3.16-postgres"
+val VERSION = "0.4.0-postgres"
 
 val mavenRelease = MavenRepository("maven-releases", "https://nexus.ism-dev.naumen.ru/repository/maven-releases/")
 val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.naumen.ru/repository/maven-snapshots/")
@@ -139,7 +139,7 @@ lazy val commonSettings = Seq(
   },
   // Run an example in another JVM, and quit on key press
   commands += Command.single("example") { (state, arg) =>
-    s"examples/test:runMain com.naumen.sibi..cuttle.examples.TestExample $arg" :: state
+    s"examples/test:runMain com.naumen.sibi.cuttle.examples.TestExample $arg" :: state
   }
 )
 
@@ -207,7 +207,13 @@ lazy val cuttle =
         "org.scalatest" %% "scalatest" % "3.0.5",
         "org.mockito" % "mockito-all" % "1.10.19",
         "org.tpolecat" %% "doobie-scalatest" % doobieVersion
-      ).map(_ % "it,test"),
+      ).map(_ % "it,test")
+    )
+
+lazy val timeseries =
+  (project in file("timeseries"))
+    .settings(commonSettings: _*)
+    .settings(
       // Webpack
       resourceGenerators in Compile += Def.task {
         import scala.sys.process._
@@ -237,18 +243,12 @@ lazy val cuttle =
           }
           logger.out("Running webpack...")
           assert(s"node node_modules/webpack/bin/webpack.js --output-path $webpackOutputDir --bail" ! logger == 0,
-                 "webpack failed")
+            "webpack failed")
           listFiles(webpackOutputDir)
         }
       }.taskValue,
       cleanFiles += (file(".") / "node_modules")
     )
-
-lazy val timeseries =
-  (project in file("timeseries"))
-    .settings(commonSettings: _*)
-    .settings(
-      )
     .dependsOn(cuttle % "compile->compile;test->test")
 
 lazy val examples =

@@ -11,10 +11,10 @@ class DatabaseSuite extends FunSuite with BeforeAndAfter {
   val queries: Queries = new Queries {}
 
   private val dbConfig = DatabaseConfig(
-    Seq(DBLocation("localhost", 3388)),
-    "sys",
-    "root",
-    ""
+    Seq(DBLocation("psql2.gp.naumen.ru", 5432)),
+    "ybushuev_cuttle",
+    "cuttle",
+    "cuttle"
   )
 
   // service transactor is used for schema creation
@@ -22,14 +22,15 @@ class DatabaseSuite extends FunSuite with BeforeAndAfter {
 
   private implicit val logHandler: log.LogHandler = DoobieLogsHandler(logger).handler
 
+
   private def createDatabaseIfNotExists(): Unit =
-    sql"CREATE DATABASE IF NOT EXISTS cuttle_it_test".update.run.transact(serviceTransactor).unsafeRunSync()
+    Database.withoutTransaction(sql"CREATE DATABASE  cuttle_it_test;".update.run).transact(serviceTransactor).unsafeRunSync()
 
   private def clean(): Unit =
-    sql"DROP DATABASE IF EXISTS cuttle_it_test".update.run.transact(serviceTransactor).unsafeRunSync()
+    Database.withoutTransaction(sql"""DROP DATABASE IF EXISTS cuttle_it_test; CREATE DATABASE  cuttle_it_test;""".update.run).transact(serviceTransactor).unsafeRunSync()
 
   before {
-    clean()
-    createDatabaseIfNotExists()
+//    clean()
+//    createDatabaseIfNotExists()
   }
 }

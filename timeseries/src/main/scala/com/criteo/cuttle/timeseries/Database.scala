@@ -130,20 +130,20 @@ private[timeseries] object Database {
     def serializeState(state: State): ConnectionIO[Int] = {
         import JobState.{Done, Todo}
 
-        val now = Instant.now()
-        val stateJson = state.toList.map {
-            case (job, im) =>
-                (job.id, im.toList.filter {
-                    case (_, jobState) =>
-                        jobState match {
-                            case Done => true
-                            case Todo(_) => true
-                            case _ => false
-                        }
-                })
-        }.asJson
-        sql"INSERT INTO timeseries_state (state, date) VALUES (${stateJson} :: JSONB, ${now})".update.run
-    }
+    val now = Instant.now()
+    val stateJson = state.toList.map {
+      case (job, im) =>
+        (job.id, im.toList.filter {
+          case (_, jobState) =>
+            jobState match {
+              case Done(_) => true
+              case Todo(_) => true
+              case _       => false
+            }
+        })
+    }.asJson
+    sql"INSERT INTO timeseries_state (state, date) VALUES (${stateJson}, ${now})".update.run
+  }
 
     def queryBackfills(where: Option[Fragment] = None) = {
         val select =
