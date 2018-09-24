@@ -337,8 +337,8 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
         """.stripMargin
   }
 
-  private def assert(condition: Boolean, msg: String)(implicit job: TimeSeriesJob) =
-    (if (condition) Right(true) else Left(BackfillError(job, msg))).right
+  private def assert(condition: Boolean, msg: String)(implicit job: TimeSeriesJob): Either[BackfillError, Boolean] =
+    if (condition) Right(true) else Left(BackfillError(job, msg))
 
   /**
     * @return the list of errors for the input backfill configuration, if any
@@ -679,10 +679,10 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
   private[timeseries] def jobsToRun(workflow: Workflow, state0: State, now: Instant, projectVersion: String): List[Executable] = {
 
     val timerInterval = Interval(Bottom, Finite(now))
-    val state = state0.mapValues(_.intersect(timerInterval))
+    val state: Map[TimeSeriesJob, IntervalMap[Instant, JobState]] = state0.mapValues(_.intersect(timerInterval))
 
-    val parentsMap = workflow.edges.groupBy { case (child, _, _)   => child }
-    val childrenMap = workflow.edges.groupBy { case (_, parent, _) => parent }
+    val parentsMap: Map[Job[TimeSeries], Set[(Job[TimeSeries], Job[TimeSeries], TimeSeriesDependency)]] = workflow.edges.groupBy { case (child, _, _)   => child }
+    val childrenMap: Map[Job[TimeSeries], Set[(Job[TimeSeries], Job[TimeSeries], TimeSeriesDependency)]] = workflow.edges.groupBy { case (_, parent, _) => parent }
 
     def reverseDescr(dep: TimeSeriesDependency) =
       TimeSeriesDependency(dep.offsetLow.negated, dep.offsetHigh.negated)
@@ -713,6 +713,7 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
             newIntervals.foldLeft(IntervalMap.empty[Instant, Unit])(_.update(_, ()))
         }
         .fold(full)(_ whenIsUndef _)
+
       val toRun = state(job)
         .collect { case Todo(maybeBackfill) => maybeBackfill }
         .whenIsDef(dependenciesSatisfied)

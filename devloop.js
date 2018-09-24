@@ -35,7 +35,7 @@ let front = webpack({
 
 let server = runServer({
     httpPort: 8888,
-    sh: "java -cp `cat /tmp/classpath_com.criteo.cuttle.examples` com.criteo.cuttle.examples.HelloTimeSeries",
+    sh: "java -cp `cat /tmp/classpath_com.criteo.cuttle.examples` com.criteo.cuttle.examples.HelloCustomScheduling",
     env: {
         CUTTLE_PG_URI: "psql2.gp.naumen.ru:5432",
         CUTTLE_PG_DATABASE: "ybushuev_cuttle",

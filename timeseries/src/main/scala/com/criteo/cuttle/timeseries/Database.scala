@@ -36,7 +36,8 @@ private[timeseries] object Database {
                 .evalMap { oldContexts =>
                     insert.updateMany(oldContexts.map {
                         case (id, json) =>
-                            (id, json.as[TimeSeriesContext].right.get.toId)
+                            //TODO
+                            (id, json.as[TimeSeriesContext].toOption.get.toId)
                     })
                 }
                 .compile
@@ -120,7 +121,7 @@ private[timeseries] object Database {
             sql"SELECT state FROM timeseries_state ORDER BY date DESC LIMIT 1"
                 .query[Json]
                 .option
-        }.map(_.as[StoredState].right.get.flatMap {
+        }.map(_.as[StoredState].toOption.get.flatMap {
             case (jobId, st) =>
                 jobs.find(_.id == jobId).map(job => job -> IntervalMap(st: _*))
         }.toMap)
@@ -130,20 +131,20 @@ private[timeseries] object Database {
     def serializeState(state: State): ConnectionIO[Int] = {
         import JobState.{Done, Todo}
 
-    val now = Instant.now()
-    val stateJson = state.toList.map {
-      case (job, im) =>
-        (job.id, im.toList.filter {
-          case (_, jobState) =>
-            jobState match {
-              case Done(_) => true
-              case Todo(_) => true
-              case _       => false
-            }
-        })
-    }.asJson
-    sql"INSERT INTO timeseries_state (state, date) VALUES (${stateJson}, ${now})".update.run
-  }
+        val now = Instant.now()
+        val stateJson = state.toList.map {
+            case (job, im) =>
+                (job.id, im.toList.filter {
+                    case (_, jobState) =>
+                        jobState match {
+                            case Done(_) => true
+                            case Todo(_) => true
+                            case _ => false
+                        }
+                })
+        }.asJson
+        sql"INSERT INTO timeseries_state (state, date) VALUES (${stateJson} ::JSONB , ${now})".update.run
+    }
 
     def queryBackfills(where: Option[Fragment] = None) = {
         val select =
