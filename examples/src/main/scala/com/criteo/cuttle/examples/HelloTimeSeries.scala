@@ -114,7 +114,8 @@ object HelloTimeSeries {
       // or from others smaller Workflows.
       world dependsOn (hello1 and hello2 and hello3)
     }.
-    // Starts the scheduler and an HTTP server.
-    start()
+    // The call to start actually start the scheduler and open an HTTP port serving both an UI to
+    // track the project status as well as JSON API.
+    start(host = "192.168.141.30")
   }
 }

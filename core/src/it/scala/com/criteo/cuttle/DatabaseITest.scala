@@ -12,7 +12,7 @@ import scala.concurrent.Future
 
 class DatabaseITest extends DatabaseSuite with IOChecker with TestScheduling {
   val dbConfig = DatabaseConfig(
-    Seq(DBLocation("localhost", 3388)),
+    Seq(DBLocation("psql2.gp.naumen.ru", 5432)),
     dbName,
     "root",
     ""
