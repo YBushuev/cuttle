@@ -4,11 +4,12 @@ import java.time.ZoneOffset.UTC
 import java.time._
 import java.time.temporal.ChronoUnit._
 import java.time.temporal.{ChronoUnit, TemporalAdjusters}
-import java.util.UUID
+import java.util.{Comparator, UUID}
 
 import scala.collection.mutable
 import scala.concurrent._
 import scala.concurrent.duration.{Duration => ScalaDuration}
+import scala.concurrent.stm.Txn.ExternalDecider
 import scala.concurrent.stm._
 import scala.math.Ordering.Implicits._
 
@@ -215,7 +216,10 @@ private[timeseries] object Backfill {
   * @param end End instant of the partition to compute.
   * @param backfill If this execution is for a backfill, the [[Backfill]] informations are provided.
   */
-case class TimeSeriesContext(start: Instant, end: Instant, backfill: Option[Backfill] = None, projectVersion: String = "")
+case class TimeSeriesContext(start: Instant,
+                             end: Instant,
+                             backfill: Option[Backfill] = None,
+                             projectVersion: String = "")
     extends SchedulingContext {
 
   override def asJson: Json = TimeSeriesContext.encoder(this)
@@ -247,6 +251,12 @@ private[timeseries] object TimeSeriesContext {
   implicit val encoder: Encoder[TimeSeriesContext] = deriveEncoder
   implicit def decoder(implicit jobs: Set[Job[TimeSeries]]): Decoder[TimeSeriesContext] =
     deriveDecoder
+
+  /** Provide an implicit `Ordering` for [[TimeSeriesContext]] based on the `compareTo` function. */
+  implicit val ordering: Ordering[TimeSeriesContext] =
+    Ordering.comparatorToOrdering(new Comparator[TimeSeriesContext] {
+      def compare(o1: TimeSeriesContext, o2: TimeSeriesContext) = o1.compareTo(o2)
+    })
 }
 
 /** A [[TimeSeriesDependency]] qualify the dependency between 2 [[com.criteo.cuttle.Job Jobs]] in a
@@ -295,10 +305,16 @@ private[timeseries] object JobState {
   case class Todo(maybeBackfill: Option[Backfill]) extends JobState
   case class Running(executionId: String) extends JobState
 
+  implicit val doneDecoder: Decoder[Done] = new Decoder[Done] {
+    final def apply(c: HCursor): Decoder.Result[Done] =
+      for {
+        version <- c.downField("projectVersion").as[String].orElse(Right("no-version"))
+      } yield Done(version)
+  }
+
   import TimeSeriesUtils._
   implicit val encoder: Encoder[JobState] = deriveEncoder
-  implicit def decoder(implicit jobs: Set[TimeSeriesJob]): Decoder[JobState] =
-    deriveDecoder
+  implicit def decoder(implicit jobs: Set[TimeSeriesJob]): Decoder[JobState] = deriveDecoder
   implicit val eqInstance: Eq[JobState] = Eq.fromUniversalEquals[JobState]
 }
 
@@ -322,6 +338,16 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
   private val _state = Ref(Map.empty[TimeSeriesJob, IntervalMap[Instant, JobState]])
 
   private val _backfills = Ref(Set.empty[Backfill])
+
+  private val _pausedJobs = Ref(Set.empty[PausedJob])
+
+  def pausedJobs(): Set[PausedJob] = atomic { implicit txn =>
+    _pausedJobs()
+  }
+
+  private val queries = new Queries {
+    val appLogger: Logger = logger
+  }
 
   private[timeseries] def state: (State, Set[Backfill]) = atomic { implicit txn =>
     (_state(), _backfills())
@@ -381,7 +407,7 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
 
     validationByJob.flatMap(_ match {
       case Left(error) => Some(error)
-      case Right(_) => None
+      case Right(_)    => None
     })
   }
 
@@ -434,7 +460,7 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
 
       val validBackfills: List[Backfill] = backfills.flatMap { newBackfill =>
         validateBackfill(newBackfill, currentJobStates).toList match {
-          case Nil =>  Some(newBackfill)
+          case Nil => Some(newBackfill)
           case (validationErrors) =>
             backfillErrors += validationErrors.mkString("\n")
             None
@@ -448,10 +474,13 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
     result match {
       case Left(errors) => IO.pure(Left(errors.mkString("\n")))
       case Right(backfills) =>
-        val dbUpdate: IO[Either[String, Unit]] = backfills.map { newBackfill =>
-          updateBackfillState(newBackfill)
-          Database.createBackfill(newBackfill).transact(xa)
-        }.sequence.map(_ => Right(Unit))
+        val dbUpdate: IO[Either[String, Unit]] = backfills
+          .map { newBackfill =>
+            updateBackfillState(newBackfill)
+            Database.createBackfill(newBackfill).transact(xa)
+          }
+          .sequence
+          .map(_ => Right(Unit))
 
         dbUpdate
     }
@@ -475,8 +504,9 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
       // collect all periods that are intersecting with [start, end]
       val interval2State: List[(Interval[Instant], JobState)] = states(job).intersect(queryInterval).toList
       // in a Done state, and correct periodicity
-      interval2State.collect { case (Interval(Finite(lo), Finite(hi)), Done(_)) =>
-        (lo, hi) -> job
+      interval2State.collect {
+        case (Interval(Finite(lo), Finite(hi)), Done(_)) =>
+          (lo, hi) -> job
       }
     }.toList
 
@@ -484,49 +514,164 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
       .groupBy { case (interval, job) => interval }
       .map { case (interval, groups) => interval -> groups.map { case (interval, job) => job }.toSet }
 
-    val orderingByTimestamp = Ordering.by { e: Instant => e.toEpochMilli }
+    val orderingByTimestamp = Ordering.by { e: Instant =>
+      e.toEpochMilli
+    }
 
     // Build an interval tree with the jobs to backfill for faster intersection queries
     var jobsByElementaryPeriod = RangedSeq.empty[(TimeInterval, Set[TimeSeriesJob]), Instant](_._1, orderingByTimestamp)
 
-    candidateBackfillsGroupedByPeriod.foreach { case (interval, jobs) =>
-      jobsByElementaryPeriod = jobsByElementaryPeriod + (interval -> jobs)
+    candidateBackfillsGroupedByPeriod.foreach {
+      case (interval, jobs) =>
+        jobsByElementaryPeriod = jobsByElementaryPeriod + (interval -> jobs)
     }
 
     val elementaryPeriods: List[(Instant, Instant)] = candidateBackfillsByPeriod
-      .flatMap {case (interval, _) => List(interval._1, interval._2) }
+      .flatMap { case (interval, _) => List(interval._1, interval._2) }
       .distinct
       .sorted
       .iterator
-      .sliding(2).withPartial(false).toList
-      .map { case List(start, end) => (start, end)}
+      .sliding(2)
+      .withPartial(false)
+      .toList
+      .map { case List(start, end) => (start, end) }
 
-    val jobsToBackFillByPeriod: List[(TimeInterval, Set[TimeSeriesJob])] = elementaryPeriods.map { case (start, end) =>
-      val jobsOnPeriod = jobsByElementaryPeriod.filterOverlaps(start -> end)
-        .map(_._2)
-        .foldLeft(Set.empty[TimeSeriesJob])(_ ++ _)
-      (start, end) -> jobsOnPeriod
-    }.filter { case (interval, jobs) => jobs.nonEmpty }
+    val jobsToBackFillByPeriod: List[(TimeInterval, Set[TimeSeriesJob])] = elementaryPeriods
+      .map {
+        case (start, end) =>
+          val jobsOnPeriod = jobsByElementaryPeriod
+            .filterOverlaps(start -> end)
+            .map(_._2)
+            .foldLeft(Set.empty[TimeSeriesJob])(_ ++ _)
+          (start, end) -> jobsOnPeriod
+      }
+      .filter { case (interval, jobs) => jobs.nonEmpty }
 
-
-    val backfills: List[Backfill] = jobsToBackFillByPeriod.map { case ((backfillStart, backfillEnd), jobsToBackfill) =>
-      Backfill(
-        UUID.randomUUID().toString,
-        backfillStart,
-        backfillEnd,
-        jobsToBackfill,
-        priority,
-        name,
-        description,
-        "RUNNING",
-        user.userId
-      )
+    val backfills: List[Backfill] = jobsToBackFillByPeriod.map {
+      case ((backfillStart, backfillEnd), jobsToBackfill) =>
+        Backfill(
+          UUID.randomUUID().toString,
+          backfillStart,
+          backfillEnd,
+          jobsToBackfill,
+          priority,
+          name,
+          description,
+          "RUNNING",
+          user.userId
+        )
     }
 
     backfills
   }
 
-  def start(workflow0: Workload[TimeSeries], executor: Executor[TimeSeries], xa: XA, logger: Logger): Unit = {
+  private[timeseries] def pauseJobs(jobs: Set[Job[TimeSeries]], executor: Executor[TimeSeries], xa: XA)(
+    implicit user: Auth.User): Unit = {
+    val executionsToCancel = atomic { implicit tx =>
+      val pauseDate = Instant.now()
+      val pausedJobIds = _pausedJobs().map(_.id)
+      val jobsToPause: Set[PausedJob] = jobs
+        .filter(job => !pausedJobIds.contains(job.id))
+        .map(job => PausedJob(job.id, user, pauseDate))
+
+      if (jobsToPause.isEmpty) return
+
+      _pausedJobs() = _pausedJobs() ++ jobsToPause
+
+      val pauseQuery = jobsToPause.map(queries.pauseJob).reduceLeft(_ *> _)
+      Txn.setExternalDecider(new ExternalDecider {
+        def shouldCommit(implicit txn: InTxnEnd): Boolean = {
+          pauseQuery.transact(xa).unsafeRunSync
+          true
+        }
+      })
+
+      jobsToPause.flatMap { pausedJob =>
+        executor.runningState.filterKeys(_.job.id == pausedJob.id).keys ++ executor.throttledState
+          .filterKeys(_.job.id == pausedJob.id)
+          .keys
+      }
+    }
+    logger.debug(s"we will cancel ${executionsToCancel.size} executions")
+    executionsToCancel.toList.sortBy(_.context).reverse.foreach { execution =>
+      execution.streams.debug(s"Job has been paused by user ${user.userId}")
+      execution.cancel()
+    }
+  }
+
+  private[timeseries] def resumeJobs(jobs: Set[Job[TimeSeries]], xa: XA)(implicit user: Auth.User): Unit = {
+    val jobIdsToResume = jobs.map(_.id)
+    val resumeQuery = jobIdsToResume.map(queries.resumeJob).reduceLeft(_ *> _)
+
+    atomic { implicit tx =>
+      Txn.setExternalDecider(new ExternalDecider {
+        def shouldCommit(implicit tx: InTxnEnd): Boolean = {
+          resumeQuery.transact(xa).unsafeRunSync
+          true
+        }
+      })
+
+      _pausedJobs() = _pausedJobs() -- _pausedJobs().filter(pausedJob => jobIdsToResume.contains(pausedJob.id))
+    }
+  }
+
+  /**
+    * Given a list of current executions, update their state and submit new executions depending on the current time and
+    * changes in execution states.
+    * @param running set of still running executions
+    * @return new set of running executions
+    **/
+  private[timeseries] def updateCurrentExecutionsAndSubmitNewExecutions(running: Set[Run],
+                                                                        workflow: Workflow,
+                                                                        executor: Executor[TimeSeries],
+                                                                        xa: XA): Set[Run] = {
+    val (completed, stillRunning) = running.partition {
+      case (_, _, effect) => effect.isCompleted
+    }
+
+    val (stateSnapshot, completedBackfills, toRun) = atomic { implicit txn =>
+      val (stateSnapshot, newBackfills, completedBackfills) =
+        collectCompletedJobs(_state(), _backfills(), completed)
+
+      val toRun = jobsToRun(workflow, stateSnapshot, Instant.now, executor.projectVersion)
+
+      _state() = stateSnapshot
+      _backfills() = newBackfills
+
+      (stateSnapshot, completedBackfills, toRun)
+    }
+
+    val newExecutions = executor.runAll(toRun)
+
+    atomic { implicit txn =>
+      _state() = newExecutions.foldLeft(_state()) {
+        case (st, (execution, _)) =>
+          st + (execution.job ->
+            st(execution.job).update(execution.context.toInterval, Running(execution.id)))
+      }
+    }
+
+    if (completed.nonEmpty || toRun.nonEmpty)
+      runOrLogAndDie(Database.serializeState(stateSnapshot).transact(xa).unsafeRunSync,
+                     "TimeseriesScheduler, cannot serialize state, shutting down")
+
+    if (completedBackfills.nonEmpty)
+      runOrLogAndDie(
+        Database
+          .setBackfillStatus(completedBackfills.map(_.id), "COMPLETE")
+          .transact(xa)
+          .unsafeRunSync,
+        "TimeseriesScheduler, cannot serialize state, shutting down"
+      )
+
+    val newRunning = stillRunning ++ newExecutions.map {
+      case (execution, result) =>
+        (execution.job, execution.context, result)
+    }
+    newRunning
+  }
+
+  private[timeseries] def initialize(workflow0: Workload[TimeSeries], xa: XA, logger: Logger) = {
     val workflow = workflow0.asInstanceOf[Workflow]
     logger.info("Validate workflow before start")
     TimeSeriesUtils.validate(workflow) match {
@@ -548,7 +693,7 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
       .unsafeRunSync
       .foreach { state =>
         atomic { implicit txn =>
-          _state() = state
+          _state() = cleanTimeseriesState(state)
         }
       }
 
@@ -568,72 +713,34 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
         .unsafeRunSync
 
       _backfills() = _backfills() ++ incompleteBackfills
+      _pausedJobs() = _pausedJobs() ++ queries.getPausedJobs.transact(xa).unsafeRunSync()
 
       workflow.vertices.foreach { job =>
         val calendar = job.scheduling.calendar
-        val definedInterval = Interval(
-          Finite(calendar.ceil(job.scheduling.start)),
-          job.scheduling.end.map(calendar.truncate _).map(Finite.apply _).getOrElse(Top))
+        val definedInterval = Interval(Finite(calendar.ceil(job.scheduling.start)),
+                                       job.scheduling.end.map(calendar.truncate _).map(Finite.apply _).getOrElse(Top))
         val oldJobState = _state().getOrElse(job, IntervalMap.empty[Instant, JobState])
         val missingIntervals = IntervalMap(definedInterval -> (()))
           .whenIsUndef(oldJobState.intersect(definedInterval))
           .toList
           .map(_._1)
-        val jobState = missingIntervals.foldLeft(oldJobState) { (st, interval) =>
-          st.update(interval, Todo(None))
-        }.intersect(definedInterval)
+        val jobState = missingIntervals
+          .foldLeft(oldJobState) { (st, interval) =>
+            st.update(interval, Todo(None))
+          }
+          .intersect(definedInterval)
         _state() = _state() + (job -> jobState)
       }
     }
+    workflow
+  }
+
+  def start(workflow0: Workload[TimeSeries], executor: Executor[TimeSeries], xa: XA, logger: Logger): Unit = {
+    val workflow = initialize(workflow0, xa, logger)
 
     def mainLoop(running: Set[Run]): Unit = {
-      val (completed, stillRunning) = running.partition {
-        case (_, _, effect) => effect.isCompleted
-      }
-
-      val (stateSnapshot, completedBackfills, toRun) = atomic { implicit txn =>
-        val (stateSnapshot, newBackfills, completedBackfills) =
-          collectCompletedJobs(_state(), _backfills(), completed)
-
-        val toRun = jobsToRun(workflow, stateSnapshot, Instant.now, executor.projectVersion)
-
-        _state() = stateSnapshot
-        _backfills() = newBackfills
-
-        (stateSnapshot, completedBackfills, toRun)
-      }
-
-      val newExecutions = executor.runAll(toRun)
-
-      atomic { implicit txn =>
-        _state() = newExecutions.foldLeft(_state()) {
-          case (st, (execution, _)) =>
-            st + (execution.job ->
-              st(execution.job).update(execution.context.toInterval, Running(execution.id)))
-        }
-      }
-
-      if (completed.nonEmpty || toRun.nonEmpty)
-        runOrLogAndDie(Database.serializeState(stateSnapshot).transact(xa).unsafeRunSync,
-                       "TimeseriesScheduler, cannot serialize state, shutting down")
-
-      if (completedBackfills.nonEmpty)
-        runOrLogAndDie(
-          Database
-            .setBackfillStatus(completedBackfills.map(_.id), "COMPLETE")
-            .transact(xa)
-            .unsafeRunSync,
-          "TimeseriesScheduler, cannot serialize state, shutting down"
-        )
-
-      val newRunning = stillRunning ++ newExecutions.map {
-        case (execution, result) =>
-          (execution.job, execution.context, result)
-      }
-
-      utils.Timeout(ScalaDuration.create(1, "s")).andThen {
-        case _ => mainLoop(newRunning)
-      }
+      val newRunning = updateCurrentExecutionsAndSubmitNewExecutions(running, workflow, executor, xa)
+      utils.Timeout(ScalaDuration.create(1, "s")).andThen { case _ => mainLoop(newRunning) }
     }
 
     mainLoop(Set.empty)
@@ -659,30 +766,50 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
                                                backfills: Set[Backfill],
                                                completed: Set[Run]): (State, Set[Backfill], Set[Backfill]) = {
     def isDone(state: State, job: TimeSeriesJob, context: TimeSeriesContext): Boolean =
-      state.apply(job).intersect(context.toInterval).toList.forall { case (_, state) => state == Done }
+      state.apply(job).intersect(context.toInterval).toList.forall {
+        case (_, Done(_)) => true
+        case _            => false
+      }
 
     // update state with job statuses
     val newState = completed.foldLeft(state) {
       case (acc, (job, context, future)) =>
-        val jobState = if (future.value.get.isSuccess || isDone(state, job, context)) Done(context.projectVersion) else Todo(context.backfill)
+        val jobState =
+          if (future.value.get.isSuccess || isDone(state, job, context)) Done(context.projectVersion)
+          else Todo(context.backfill)
         acc + (job -> acc(job).update(context.toInterval, jobState))
+    }
+
+    def jobHasExecutionsRunningOnPeriod(job: Job[TimeSeries], period: Interval[Instant]): Boolean = {
+      val jobStateOnPeriod = newState(job).intersect(period).toList
+      jobStateOnPeriod.exists {
+        case (interval, jobState) =>
+          jobState match {
+            case Done(_) => false
+            case _       => true
+          }
+      }
     }
 
     val notCompletedBackfills = backfills.filter { bf =>
       val itvl = Interval(bf.start, bf.end)
-      bf.jobs.exists(job => newState(job).intersect(itvl).toList.exists(_._2 != Done))
+      bf.jobs.exists(job => jobHasExecutionsRunningOnPeriod(job, itvl))
     }
 
     (newState, notCompletedBackfills, backfills -- notCompletedBackfills)
   }
 
-  private[timeseries] def jobsToRun(workflow: Workflow, state0: State, now: Instant, projectVersion: String): List[Executable] = {
+  private[timeseries] def jobsToRun(workflow: Workflow,
+                                    state0: State,
+                                    now: Instant,
+                                    projectVersion: String): List[Executable] = {
 
     val timerInterval = Interval(Bottom, Finite(now))
     val state: Map[TimeSeriesJob, IntervalMap[Instant, JobState]] = state0.mapValues(_.intersect(timerInterval))
 
-    val parentsMap: Map[Job[TimeSeries], Set[(Job[TimeSeries], Job[TimeSeries], TimeSeriesDependency)]] = workflow.edges.groupBy { case (child, _, _)   => child }
-    val childrenMap: Map[Job[TimeSeries], Set[(Job[TimeSeries], Job[TimeSeries], TimeSeriesDependency)]] = workflow.edges.groupBy { case (_, parent, _) => parent }
+    val parentsMap = workflow.edges.groupBy { case (child, _, _)   => child }
+    val childrenMap = workflow.edges.groupBy { case (_, parent, _) => parent }
+    val pausedJobIds = pausedJobs().map(_.id)
 
     def reverseDescr(dep: TimeSeriesDependency) =
       TimeSeriesDependency(dep.offsetLow.negated, dep.offsetHigh.negated)
@@ -693,29 +820,44 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
         if (low >= high) None else Some(Interval(low, high))
       }
 
-    workflow.vertices.toList.flatMap { job =>
+    def joinIntervals(intervals: List[Interval[Instant]]): List[Interval[Instant]] =
+      intervals
+        .foldLeft(IntervalMap.empty[Instant, Unit]) { case (intervalMap, interval) => intervalMap.update(interval, ()) }
+        .toList
+        .map { case (interval, _) => interval }
+
+    workflow.vertices.filter(job => !pausedJobIds.contains(job.id)).toList.flatMap { job =>
       val full = IntervalMap[Instant, Unit](Interval[Instant](Bottom, Top) -> (()))
       val dependenciesSatisfied = parentsMap
         .getOrElse(job, Set.empty)
         .map {
           case (_, parent, lbl) =>
-            val intervals: List[Interval[Instant]] = state(parent).collect { case Done(_) => () }.toList.map(_._1)
+            val donePeriods: IntervalMap[Instant, Unit] = state(parent).collect { case Done(_) => () }
+            val intervals: List[Interval[Instant]] =
+              joinIntervals(donePeriods.toList.map { case (interval, _) => interval })
             val newIntervals = intervals.collect(applyDep(reverseDescr(lbl)))
-            newIntervals.foldLeft(IntervalMap.empty[Instant, Unit])(_.update(_, ()))
+            val intervalMapOfSatisfiedDeps = newIntervals.foldLeft(IntervalMap.empty[Instant, Unit])(_.update(_, ()))
+            intervalMapOfSatisfiedDeps
         }
         .fold(full)(_ whenIsDef _)
+
       val noChildrenRunning = childrenMap
         .getOrElse(job, Set.empty)
         .map {
           case (child, _, lbl) =>
-            val intervals = state(child).collect { case Running(_) => () }.toList.map(_._1)
+            val runningPeriods: IntervalMap[Instant, Unit] = state(child).collect { case Running(_) => () }
+            val intervals = joinIntervals(runningPeriods.toList.map { case (interval, _) => interval })
             val newIntervals = intervals.collect(applyDep(lbl))
-            newIntervals.foldLeft(IntervalMap.empty[Instant, Unit])(_.update(_, ()))
+            val intervalMapWithCompletedChildren =
+              newIntervals.foldLeft(IntervalMap.empty[Instant, Unit])(_.update(_, ()))
+            intervalMapWithCompletedChildren
         }
         .fold(full)(_ whenIsUndef _)
 
-      val toRun = state(job)
-        .collect { case Todo(maybeBackfill) => maybeBackfill }
+      val todoPeriods: IntervalMap[Instant, Option[Backfill]] = state(job).collect {
+        case Todo(maybeBackfill) => maybeBackfill
+      }
+      val toRun = todoPeriods
         .whenIsDef(dependenciesSatisfied)
         .whenIsDef(noChildrenRunning)
 
@@ -728,10 +870,11 @@ case class TimeSeriesScheduler(logger: Logger) extends Scheduler[TimeSeries] {
     }
   }
 
-  private[timeseries] def forceSuccess(job: TimeSeriesJob, interval: Interval[Instant], projectVersion: String): Unit = atomic { implicit txn =>
-    val jobState = _state().apply(job)
-    _state() = _state() + (job -> jobState.update(interval, Done(projectVersion)))
-  }
+  private[timeseries] def forceSuccess(job: TimeSeriesJob, interval: Interval[Instant], projectVersion: String): Unit =
+    atomic { implicit txn =>
+      val jobState = _state().apply(job)
+      _state() = _state() + (job -> jobState.update(interval, Done(projectVersion)))
+    }
 
   private def getRunningBackfillsSize(jobs: Set[String]) = {
     val runningBackfills = state match {
@@ -860,14 +1003,29 @@ object TimeSeriesUtils {
   def validate(workflow: Workflow): Either[List[String], Unit] = {
     val errors = collection.mutable.ListBuffer(Workflow.validate(workflow): _*)
 
-    workflow.edges.map { case (childJob, parentJob, _) =>
-      if (childJob.scheduling.start.isBefore(parentJob.scheduling.start)) {
-        errors += s"Job [${childJob.id}] starts at [${childJob.scheduling.start.toString}] " +
-          s"before his parent [${parentJob.id}] at [${parentJob.scheduling.start.toString}]"
-      }
+    workflow.edges.map {
+      case (childJob, parentJob, _) =>
+        if (childJob.scheduling.start.isBefore(parentJob.scheduling.start)) {
+          errors += s"Job [${childJob.id}] starts at [${childJob.scheduling.start.toString}] " +
+            s"before his parent [${parentJob.id}] at [${parentJob.scheduling.start.toString}]"
+        }
     }
 
     if (errors.nonEmpty) Left(errors.toList)
     else Right(())
+  }
+
+  /**
+    * Filter potentially incorrect state intervals which were the result of bugs in previous versions. These bugs were mainly
+    * related to the addition of the project version in the serialized execution state.
+    */
+  private[timeseries] def cleanTimeseriesState(state: State): State = {
+    val cleanedState = state.map { case (job, intervalMap) =>
+      job -> intervalMap.toList
+        .foldLeft(IntervalMap.empty[Instant, JobState]) { case (aggregatedIntervals, (interval, jobState)) =>
+          aggregatedIntervals.update(interval, jobState)
+        }
+    }
+    cleanedState
   }
 }

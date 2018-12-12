@@ -4,7 +4,7 @@ import doobie.implicits._
 import com.criteo.cuttle._
 import java.time._
 
-//TODO
+//TODO UPSERT
 class PersistInstant(xa: XA) {
   def set(id: String, t: Instant): Instant = {
     sql"INSERT INTO instant_data VALUES (${id}, ${t})"
@@ -14,7 +14,10 @@ class PersistInstant(xa: XA) {
 
   def get(id: String): Option[Instant] =
     sql"SELECT instant FROM instant_data WHERE id = ${id}"
-      .query[Instant].option.transact(xa).unsafeRunSync
+      .query[Instant]
+      .option
+      .transact(xa)
+      .unsafeRunSync
 }
 
 object PersistInstant {

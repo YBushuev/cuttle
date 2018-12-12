@@ -1,16 +1,15 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.4.0-postgres"
+val VERSION = "0.4.7-postgres"
 
 val mavenRelease = MavenRepository("maven-releases", "https://nexus.ism-dev.naumen.ru/repository/maven-releases/")
 val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.naumen.ru/repository/maven-snapshots/")
 
-
 lazy val commonSettings = Seq(
   organization := "com.naumen.sibi.cuttle",
   version := VERSION,
-  scalaVersion := "2.12.6",
+  scalaVersion := "2.12.8",
   scalacOptions ++= Seq(
     "-deprecation",
     "-encoding",
@@ -190,7 +189,7 @@ lazy val cuttle =
         "de.sciss" %% "fingertree" % "1.5.2",
         "org.scala-stm" %% "scala-stm" % "0.8",
         "org.scala-lang" % "scala-reflect" % scalaVersion.value,
-        "org.typelevel" %% "cats-core" % "1.3.1",
+        "org.typelevel" %% "cats-core" % "1.5.0",
         "org.typelevel" %% "cats-mtl-core" % "0.3.0",
         "codes.reactive" %% "scala-time" % "0.4.1",
         "com.zaxxer" % "nuprocess" % "1.2.4"
@@ -243,7 +242,7 @@ lazy val timeseries =
           }
           logger.out("Running webpack...")
           assert(s"node node_modules/webpack/bin/webpack.js --output-path $webpackOutputDir --bail" ! logger == 0,
-            "webpack failed")
+                 "webpack failed")
           listFiles(webpackOutputDir)
         }
       }.taskValue,
@@ -257,7 +256,8 @@ lazy val examples =
     .settings(
       publishArtifact := false,
       fork in Test := true,
-      connectInput in Test := true
+      connectInput in Test := true,
+      javaOptions ++= Seq("-Xmx256m", "-XX:+HeapDumpOnOutOfMemoryError"),
     )
     .settings(
       Option(System.getProperty("generateExamples"))

@@ -1,5 +1,10 @@
 package com.criteo.cuttle
 
+import java.time._
+import java.util.concurrent.TimeUnit
+
+import scala.util._
+
 import doobie._
 import doobie.implicits._
 import doobie.hikari._
@@ -10,10 +15,6 @@ import io.circe.parser._
 import cats.data.NonEmptyList
 import cats.implicits._
 import cats.effect.IO
-
-import scala.util._
-import java.time._
-import java.util.concurrent.{Executors, TimeUnit}
 
 import ExecutionStatus._
 import com.criteo.cuttle.events.{Event, JobSuccessForced}
@@ -167,28 +168,27 @@ private[cuttle] object Database {
         """.update.run.transact(xa).unsafeRunSync
         })
 
-        // Refresh our lock every minute (and check that we still are the lock owner)
-        Executors
-            .newScheduledThreadPool(1)
-            .scheduleAtFixedRate(
-                new Runnable {
-                    def run =
-                        if ((sql"""
-            UPDATE locks SET locked_at = current_timestamp WHERE locked_by = ${guid}
+    // Refresh our lock every minute (and check that we still are the lock owner)
+    ThreadPools
+      .newScheduledThreadPool(1, poolName = Some("DatabaseLock"))
+      .scheduleAtFixedRate(
+        new Runnable {
+          def run =
+            if ((sql"""
+            UPDATE locks SET locked_at = NOW() WHERE locked_by = ${guid}
           """.update.run.transact(xa).unsafeRunSync: Int) != 1) {
+              xa.shutdown.unsafeRunSync
+              sys.error(s"Lock has been lost, shutting down the database connection.")
+            }
+        },
+        1,
+        1,
+        TimeUnit.MINUTES
+      )
 
-                            xa.shutdown.unsafeRunSync
-                            sys.error(s"Lock has been lost, shutting down the database connection.")
-                        }
-                },
-                1,
-                1,
-                TimeUnit.MINUTES
-            )
-
-        // We can now use the transactor safely
-        xa
-    }
+    // We can now use the transactor safely
+    xa
+  }
 
     private val doSchemaUpdates = utils.updateSchema("schema_evolutions", schemaEvolutions)
 

@@ -17,6 +17,8 @@ import MaskedInput from "react-maskedinput";
 import StreamView from "../components/StreamView";
 import TextWithDashedLine from "../components/TextWithDashedLine";
 import Error from "../components/Error";
+import ReactTooltip from "react-tooltip";
+import InfoIcon from "react-icons/lib/md/info";
 
 type Props = {
   workflow: Workflow,
@@ -58,7 +60,9 @@ const formatDate = value => {
 };
 
 const Label = ({ name, style = null }: any) => (
-  <dt key={`_${name}`} style={style}>{name}</dt>
+  <dt key={`_${name}`} style={style}>
+    {name}
+  </dt>
 );
 
 const InputField = ({
@@ -178,9 +182,11 @@ class BackfillCreate extends React.Component<Props> {
       submitting,
       env
     } = this.props;
+
+    ReactTooltip.rebuild();
+
     return (
       <Window title="Create Backfill">
-
         <form
           onSubmit={handleSubmit(this.createBackfill)}
           className={classes.createBackfillForm}
@@ -237,6 +243,12 @@ class BackfillCreate extends React.Component<Props> {
                 validate={[required, validInteger]}
                 props={{ alwaysDisplayError: true }}
               />
+              <InfoIcon style={styles.icon}
+                        data-for="backfill-priority-tooltip"
+                        data-tip="The lower the number, the higher the priority of the backfilled execution(s)."/>
+              <ReactTooltip
+                  id="backfill-priority-tooltip"
+                  effect="float"/>
             </dd>
             <dt key={"description_"} className="double-height">
               {"Description"}
@@ -246,7 +258,8 @@ class BackfillCreate extends React.Component<Props> {
                 name="description"
                 component={TextAreaField}
                 props={{
-                  placeholder: "Explain why you need to backfill. Markdown is supported."
+                  placeholder:
+                    "Explain why you need to backfill. Markdown is supported."
                 }}
               />
             </dd>
@@ -366,6 +379,9 @@ const styles = {
       /* Microsoft Edge */
       color: "#aaa"
     }
+  },
+  icon: {
+    fontSize: "22px"
   }
 };
 

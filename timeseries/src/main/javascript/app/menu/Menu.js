@@ -70,12 +70,6 @@ const Menu = ({ classes, className, active, statistics }: Props) => (
           active={active.id === "executions/finished"}
           label="Finished"
           link="/executions/finished"
-        />,
-        <MenuSubEntry
-          active={active.id === "executions/paused"}
-          label="Paused"
-          link="/executions/paused"
-          badges={[statistics.paused && { label: statistics.paused }]}
         />
       ]}
     />
@@ -121,12 +115,12 @@ const Menu = ({ classes, className, active, statistics }: Props) => (
         active.id.indexOf("timeseries/") === 0
           ? []
           : [
-            statistics.scheduler &&
-            statistics.scheduler.backfills && {
-              label: statistics.scheduler.backfills,
-              kind: "alt"
-            }
-          ]
+              statistics.scheduler &&
+                statistics.scheduler.backfills && {
+                  label: statistics.scheduler.backfills,
+                  kind: "alt"
+                }
+            ]
       }
       subEntries={[
         <MenuSubEntry

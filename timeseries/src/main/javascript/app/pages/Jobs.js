@@ -47,6 +47,7 @@ type User = {
 
 type Job = {
   [Columns]: string,
+  name: string,
   scheduling: Scheduling,
   status: JobStatus,
   user: User
@@ -374,7 +375,13 @@ const styles = {
 };
 
 const mapStateToProps = (
-  { app: { project, page: { sort, order }, selectedJobs } },
+  {
+    app: {
+      project,
+      page: { sort, order },
+      selectedJobs
+    }
+  },
   ownProps
 ) => {
   return {
