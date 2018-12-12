@@ -1,7 +1,7 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.3.16"
+val VERSION = "0.4.7"
 
 lazy val commonSettings = Seq(
   organization := "com.criteo.cuttle",
@@ -203,7 +203,17 @@ lazy val cuttle =
         "org.scalatest" %% "scalatest" % "3.0.1",
         "org.mockito" % "mockito-all" % "1.10.19",
         "org.tpolecat" %% "doobie-scalatest" % doobieVersion
-      ).map(_ % "it,test"),
+      ).map(_ % "it,test")
+    )
+
+lazy val timeseries =
+  (project in file("timeseries"))
+    .settings(commonSettings: _*)
+    .settings(
+      libraryDependencies ++= Seq(
+        "com.wix" % "wix-embedded-mysql" % "2.1.4" % "test"
+      ))
+    .settings(
       // Webpack
       resourceGenerators in Compile += Def.task {
         import scala.sys.process._
@@ -239,12 +249,6 @@ lazy val cuttle =
       }.taskValue,
       cleanFiles += (file(".") / "node_modules")
     )
-
-lazy val timeseries =
-  (project in file("timeseries"))
-    .settings(commonSettings: _*)
-    .settings(
-      )
     .dependsOn(cuttle % "compile->compile;test->test")
 
 lazy val examples =
@@ -253,7 +257,8 @@ lazy val examples =
     .settings(
       publishArtifact := false,
       fork in Test := true,
-      connectInput in Test := true
+      connectInput in Test := true,
+      javaOptions ++= Seq("-Xmx256m", "-XX:+HeapDumpOnOutOfMemoryError"),
     )
     .settings(
       Option(System.getProperty("generateExamples"))

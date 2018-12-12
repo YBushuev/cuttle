@@ -1,5 +1,10 @@
 package com.criteo.cuttle
 
+import java.time._
+import java.util.concurrent.TimeUnit
+
+import scala.util._
+
 import doobie._
 import doobie.implicits._
 import doobie.hikari._
@@ -10,10 +15,6 @@ import io.circe.parser._
 import cats.data.NonEmptyList
 import cats.implicits._
 import cats.effect.IO
-
-import scala.util._
-import java.time._
-import java.util.concurrent.{Executors, TimeUnit}
 
 import ExecutionStatus._
 import com.criteo.cuttle.events.{Event, JobSuccessForced}
@@ -164,8 +165,8 @@ private[cuttle] object Database {
     })
 
     // Refresh our lock every minute (and check that we still are the lock owner)
-    Executors
-      .newScheduledThreadPool(1)
+    ThreadPools
+      .newScheduledThreadPool(1, poolName = Some("DatabaseLock"))
       .scheduleAtFixedRate(
         new Runnable {
           def run =
@@ -340,4 +341,11 @@ private[cuttle] trait Queries {
     sql"""select 1 from dual"""
       .query[Boolean]
       .unique
+}
+
+object Queries {
+  val getAllContexts: Fragment =
+    (sql"""
+      SELECT context_id as id, context_id as json FROM executions
+    """)
 }

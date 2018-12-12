@@ -72,7 +72,7 @@ object Metrics {
 
   /** Components able to provide metrics. */
   trait MetricProvider[S <: Scheduling] {
-    def getMetrics(jobs: Set[String], workflow: Workflow[S]): Seq[Metric]
+    def getMetrics(jobIds: Set[String], jobs: Workload[S]): Seq[Metric] = Nil
   }
 
   private[cuttle] object Prometheus {
@@ -81,7 +81,8 @@ object Metrics {
         val labeledMetrics = metric.labels2Value.map {
           case (labels, value) =>
             val labelsSerialized =
-              if (labels.nonEmpty) s" {${labels.toSeq.sortBy(_._1).map(label => s"""${label._1}="${label._2}"""").mkString(", ")}} "
+              if (labels.nonEmpty)
+                s" {${labels.toSeq.sortBy(_._1).map(label => s"""${label._1}="${label._2}"""").mkString(", ")}} "
               else " "
             s"${metric.name}$labelsSerialized$value"
         }

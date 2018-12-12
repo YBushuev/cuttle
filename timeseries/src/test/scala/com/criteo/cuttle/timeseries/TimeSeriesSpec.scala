@@ -20,16 +20,16 @@ class TimeSeriesSpec extends FunSuite with TestScheduling {
     val state = Map(
       job(1) -> IntervalMap[Instant, JobState](Interval(Finite(ts(2)), Top) -> JobState.Todo(None))
     )
-    val result = scheduler.jobsToRun(job(1), state, ts(5))
+    val result = scheduler.jobsToRun(job(1), state, ts(5), "test_version")
     assert(
       result ==
         (2 to 4).map { i =>
-          (job(1), TimeSeriesContext(ts(i), ts(i + 1)))
+          (job(1), TimeSeriesContext(ts(i), ts(i + 1), projectVersion = "test_version"))
         })
   }
 
   test("it should validate empty workflow") {
-    val workflow = Workflow.empty[TimeSeries]
+    val workflow = Workflow.empty
 
     assert(TimeSeriesUtils.validate(workflow).isRight, "workflow is not valid")
   }
@@ -47,8 +47,9 @@ class TimeSeriesSpec extends FunSuite with TestScheduling {
   }
 
   test("it should validate workflow without cycles (one parent with many children)") {
-    val job1: Vector[Job[TimeSeries]] = Vector.tabulate(10)(i => Job(java.util.UUID.randomUUID.toString, scheduling)(completed))
-    val workflow = (0 to 8).map(i => job1(i) dependsOn job1(9)).reduce( _ and _)
+    val job1: Vector[Job[TimeSeries]] =
+      Vector.tabulate(10)(i => Job(java.util.UUID.randomUUID.toString, scheduling)(completed))
+    val workflow = (0 to 8).map(i => job1(i) dependsOn job1(9)).reduce(_ and _)
 
     assert(TimeSeriesUtils.validate(workflow).isRight, "workflow is not valid")
   }
@@ -87,12 +88,15 @@ class TimeSeriesSpec extends FunSuite with TestScheduling {
 
     val validationRes = TimeSeriesUtils.validate(workflow)
     assert(validationRes.isLeft, "workflow passed start date validation")
-    assert(validationRes.left.get === List(
-      "Workflow has at least one cycle",
-      "{1,badJob} form a cycle",
-      "Job [0] starts at [2017-03-25T02:00:00Z] before his parent [badJob] at [2117-03-25T02:00:00Z]",
-      "Job [1] starts at [2017-03-25T02:00:00Z] before his parent [badJob] at [2117-03-25T02:00:00Z]"
-    ), "errors messages are bad")
+    assert(
+      validationRes.left.get === List(
+        "Workflow has at least one cycle",
+        "{1,badJob} form a cycle",
+        "Job [0] starts at [2017-03-25T02:00:00Z] before his parent [badJob] at [2117-03-25T02:00:00Z]",
+        "Job [1] starts at [2017-03-25T02:00:00Z] before his parent [badJob] at [2117-03-25T02:00:00Z]"
+      ),
+      "errors messages are bad"
+    )
   }
 
   test("it shouldn't validate a workflow that contains jobs with same ids") {
@@ -124,26 +128,29 @@ class TimeSeriesSpec extends FunSuite with TestScheduling {
     // Backfill requested from hour 2 to 7
     // Backfills on periods overlapping valid calendar periods are automatically resolved when the actual backfill is run.
     val jobStates = Map[TimeSeriesUtils.TimeSeriesJob, IntervalMap[Instant, JobState]](
-      job1 -> IntervalMap[Instant, JobState](List(
-        (Interval(date"2117-03-25T01:00:00Z", date"2117-03-25T04:00:00Z"), JobState.Done),
-        (Interval(date"2117-03-25T04:00:00Z", date"2117-03-25T05:00:00Z"), JobState.Todo(None)),
-        (Interval(date"2117-03-25T05:00:00Z", date"2117-03-25T07:00:00Z"), JobState.Done)
-      ):_*),
-      job2 -> IntervalMap[Instant, JobState](List(
-        (Interval(date"2117-03-25T02:00:00Z", date"2117-03-25T04:00:00Z"), JobState.Done),
-        (Interval(date"2117-03-25T04:00:00Z", date"2117-03-25T06:00:00Z"), JobState.Todo(None)),
-        (Interval(date"2117-03-25T06:00:00Z", date"2117-03-25T07:00:00Z"), JobState.Done)
-      ):_*)
+      job1 -> IntervalMap[Instant, JobState](
+        List(
+          (Interval(date"2117-03-25T01:00:00Z", date"2117-03-25T04:00:00Z"), JobState.Done("test_version")),
+          (Interval(date"2117-03-25T04:00:00Z", date"2117-03-25T05:00:00Z"), JobState.Todo(None)),
+          (Interval(date"2117-03-25T05:00:00Z", date"2117-03-25T07:00:00Z"), JobState.Done("test_version"))
+        ): _*),
+      job2 -> IntervalMap[Instant, JobState](
+        List(
+          (Interval(date"2117-03-25T02:00:00Z", date"2117-03-25T04:00:00Z"), JobState.Done("test_version")),
+          (Interval(date"2117-03-25T04:00:00Z", date"2117-03-25T06:00:00Z"), JobState.Todo(None)),
+          (Interval(date"2117-03-25T06:00:00Z", date"2117-03-25T07:00:00Z"), JobState.Done("test_version"))
+        ): _*)
     )
 
-    val backfills = scheduler.createBackfills(
-      "mock_backfill",
-      "Test backfill",
-      Set(job1, job2),
-      jobStates,
-      start = date"2117-03-25T02:00:00Z",
-      end = date"2117-03-25T07:00:00Z",
-      priority = 0)(Auth.User("test_user_id")).sortBy(_.start)
+    val backfills = scheduler
+      .createBackfills("mock_backfill",
+                       "Test backfill",
+                       Set(job1, job2),
+                       jobStates,
+                       start = date"2117-03-25T02:00:00Z",
+                       end = date"2117-03-25T07:00:00Z",
+                       priority = 0)(Auth.User("test_user_id"))
+      .sortBy(_.start)
 
     assert(backfills.size === 3)
     val firstBackfill = (backfills(0).start, backfills(0).end, backfills(0).jobs)
@@ -153,14 +160,57 @@ class TimeSeriesSpec extends FunSuite with TestScheduling {
       val validationErrors = scheduler.validateBackfill(backfill, jobStates)
       validationErrors.isEmpty
     }
-    assert(firstBackfill.equals(
-      (date"2117-03-25T02:00:00Z", date"2117-03-25T04:00:00Z", Set(job1, job2))
-    ))
-    assert(secondBackfill.equals(
-      (date"2117-03-25T05:00:00Z", date"2117-03-25T06:00:00Z", Set(job1))
-    ))
-    assert(thirdBackfill.equals(
-      (date"2117-03-25T06:00:00Z", date"2117-03-25T07:00:00Z", Set(job1, job2))
-    ))
+    assert(
+      firstBackfill.equals(
+        (date"2117-03-25T02:00:00Z", date"2117-03-25T04:00:00Z", Set(job1, job2))
+      ))
+    assert(
+      secondBackfill.equals(
+        (date"2117-03-25T05:00:00Z", date"2117-03-25T06:00:00Z", Set(job1))
+      ))
+    assert(
+      thirdBackfill.equals(
+        (date"2117-03-25T06:00:00Z", date"2117-03-25T07:00:00Z", Set(job1, job2))
+      ))
+  }
+
+  test("should parse JobState.Done without projectVersion") {
+    import io.circe.parser._
+
+    val state = """{
+      "Done": {}
+    }"""
+
+    val parseDone = parse(state).right.flatMap(json => json.as[JobState.Done])
+    assert(parseDone.isRight)
+    assert(parseDone.right.get == JobState.Done(projectVersion = "no-version"))
+  }
+
+  test("should parse JobState without projectVersion") {
+    import io.circe.parser._
+
+    implicit val jobs: Set[Job[TimeSeries]] = Set.empty
+
+    val state = """{
+      "Done": {}
+    }"""
+
+    val parseState = parse(state).right.flatMap(json => json.as[JobState])
+    assert(parseState.isRight)
+    assert(parseState.right.get == JobState.Done(projectVersion = "no-version"))
+  }
+
+  test("should parse JobState with projectVersion") {
+    import io.circe.parser._
+
+    implicit val jobs: Set[Job[TimeSeries]] = Set.empty
+
+    val state = """{
+      "Done": { "projectVersion" : "version" }
+    }"""
+
+    val parseState = parse(state).right.flatMap(_.as[JobState])
+    assert(parseState.isRight)
+    assert(parseState.right.get == JobState.Done(projectVersion = "version"))
   }
 }
