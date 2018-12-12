@@ -4,32 +4,30 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 
-import scala.concurrent.duration._
-import scala.util._
-
 import cats.Eq
 import cats.effect.IO
 import cats.implicits._
-import doobie.implicits._
-import fs2.Stream
-import io.circe._
-import io.circe.generic.auto._
-import io.circe.java8.time._
-import io.circe.syntax._
-import lol.http._
-import lol.json._
-
 import com.criteo.cuttle.Auth._
 import com.criteo.cuttle.ExecutionStatus._
 import com.criteo.cuttle.Metrics.{Gauge, Prometheus}
-import com.criteo.cuttle._
+import com.criteo.cuttle.ThreadPools.Implicits.serverThreadPool
 import com.criteo.cuttle.ThreadPools._
-import Implicits.serverThreadPool
-import com.criteo.cuttle.utils.{createScheduler, getJVMUptime}
+import com.criteo.cuttle._
 import com.criteo.cuttle.events.JobSuccessForced
 import com.criteo.cuttle.timeseries.TimeSeriesUtils._
 import com.criteo.cuttle.timeseries.intervals.Bound.{Bottom, Finite, Top}
 import com.criteo.cuttle.timeseries.intervals._
+import com.criteo.cuttle.utils.{createScheduler, getJVMUptime}
+import doobie.implicits._
+import fs2.Stream
+import io.circe._
+import io.circe.generic.auto._
+import io.circe.syntax._
+import lol.http._
+import lol.json._
+
+import scala.concurrent.duration._
+import scala.util._
 
 private[timeseries] object TimeSeriesApp {
   private val SC = createScheduler("com.criteo.cuttle.App.SC")
@@ -109,11 +107,10 @@ private[timeseries] object TimeSeriesApp {
 
 private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: Executor[TimeSeries], xa: XA) {
 
-  import project.{jobs, scheduler}
-
   import JobState._
   import TimeSeriesApp._
   import TimeSeriesCalendar._
+  import project.{jobs, scheduler}
 
   private val allIds = jobs.all.map(_.id)
 

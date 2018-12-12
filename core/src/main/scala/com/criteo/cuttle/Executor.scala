@@ -6,27 +6,25 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.{Timer, TimerTask}
 
-import scala.concurrent.duration._
-import scala.concurrent.stm._
-import scala.concurrent.{Future, Promise}
-import scala.reflect.{classTag, ClassTag}
-import scala.util._
-
 import cats.Eq
 import cats.effect.IO
 import cats.implicits._
+import com.criteo.cuttle.Auth._
+import com.criteo.cuttle.ExecutionStatus._
+import com.criteo.cuttle.Metrics._
+import com.criteo.cuttle.ThreadPools.{SideEffectThreadPool, _}
+import com.criteo.cuttle.platforms.ExecutionPool
 import doobie.implicits._
 import doobie.util.fragment.Fragment
 import io.circe._
-import io.circe.java8.time._
 import io.circe.syntax._
 import lol.http.PartialService
 
-import com.criteo.cuttle.Auth._
-import com.criteo.cuttle.ExecutionStatus._
-import com.criteo.cuttle.ThreadPools.{SideEffectThreadPool, _}
-import com.criteo.cuttle.Metrics._
-import com.criteo.cuttle.platforms.ExecutionPool
+import scala.concurrent.duration._
+import scala.concurrent.stm._
+import scala.concurrent.{Future, Promise}
+import scala.reflect.{ClassTag, classTag}
+import scala.util._
 
 /** The strategy to use to retry stuck executions.
   *

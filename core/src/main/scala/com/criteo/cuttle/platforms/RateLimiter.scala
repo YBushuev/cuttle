@@ -1,16 +1,16 @@
 package com.criteo.cuttle.platforms
 
-import scala.concurrent.stm._
-import scala.concurrent.duration._
 import java.time._
 
-import lol.http._
-import lol.json._
-import io.circe._
-import io.circe.syntax._
-import io.circe.java8.time._
 import cats.effect.IO
 import com.criteo.cuttle.utils
+import io.circe._
+import io.circe.syntax._
+import lol.http._
+import lol.json._
+
+import scala.concurrent.duration._
+import scala.concurrent.stm._
 
 private[cuttle] object RateLimiter {
   private val SC = utils.createScheduler("com.criteo.cuttle.platforms.RateLimiter.SC")

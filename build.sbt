@@ -159,16 +159,6 @@ def removeDependencies(groups: String*)(xml: scala.xml.Node) = {
   ))(xml)
 }
 
-lazy val localdb = {
-  (project in file("localdb"))
-    .settings(commonSettings: _*)
-    .settings(
-      publishArtifact := false,
-      libraryDependencies ++= Seq(
-        "com.wix" % "wix-embedded-mysql" % "4.1.2"
-      )
-    )
-}
 
 val doobieVersion = "0.5.3"
 
@@ -183,11 +173,11 @@ lazy val cuttle =
         "com.criteo.lolhttp" %% "loljson",
         "com.criteo.lolhttp" %% "lolhtml"
       ).map(_ % "10.0.0"),
-      libraryDependencies ++= Seq("core", "generic", "parser", "java8")
-        .map(module => "io.circe" %% s"circe-${module}" % "0.9.3"),
+      libraryDependencies ++= Seq("core", "generic", "parser")
+        .map(module => "io.circe" %% s"circe-${module}" % "0.10.1"),
       libraryDependencies ++= Seq(
         "de.sciss" %% "fingertree" % "1.5.2",
-        "org.scala-stm" %% "scala-stm" % "0.8",
+        "org.scala-stm" %% "scala-stm" % "0.9",
         "org.scala-lang" % "scala-reflect" % scalaVersion.value,
         "org.typelevel" %% "cats-core" % "1.5.0",
         "org.typelevel" %% "cats-mtl-core" % "0.3.0",
@@ -199,9 +189,6 @@ lazy val cuttle =
         "org.tpolecat" %% "doobie-hikari",
         "org.tpolecat" %% "doobie-postgres"
       ).map(_ % doobieVersion),
-      libraryDependencies ++= Seq(
-        "mysql" % "mysql-connector-java" % "8.0.12"
-      ),
       libraryDependencies ++= Seq(
         "org.scalatest" %% "scalatest" % "3.0.5",
         "org.mockito" % "mockito-all" % "1.10.19",
@@ -272,7 +259,7 @@ lazy val examples =
         ))
         .getOrElse(Nil): _*
     )
-    .dependsOn(cuttle, timeseries, localdb)
+    .dependsOn(cuttle, timeseries)
 
 lazy val root =
   (project in file("."))
@@ -316,4 +303,4 @@ lazy val root =
       },
       unidocProjectFilter in (ScalaUnidoc, unidoc) := inProjects(cuttle, timeseries)
     )
-    .aggregate(cuttle, timeseries, examples, localdb)
+    .aggregate(cuttle, timeseries)

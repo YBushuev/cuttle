@@ -3,9 +3,8 @@ package com.criteo.cuttle.events
 import java.time.Instant
 
 import com.criteo.cuttle.Auth.User
-import io.circe.{Decoder, Encoder}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
-import io.circe.java8.time._
+import io.circe.{Decoder, Encoder}
 
 sealed trait Event {
   def created: Instant
