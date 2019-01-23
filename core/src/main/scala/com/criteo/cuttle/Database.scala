@@ -67,14 +67,14 @@ object DatabaseConfig {
 }
 
 private[cuttle] object Database {
-  implicit val logHandler: log.LogHandler = DoobieLogsHandler(logger).handler
+    implicit val logHandler: log.LogHandler = DoobieLogsHandler(logger).handler
 
     implicit val ExecutionStatusMeta: Meta[ExecutionStatus] = Meta[Boolean].imap(
         x => if (x) ExecutionSuccessful else ExecutionFailed: ExecutionStatus) {
-            case ExecutionSuccessful => true
-            case ExecutionFailed => false
-            case x => sys.error(s"Unexpected ExecutionLog status to write in database: $x")
-        }
+        case ExecutionSuccessful => true
+        case ExecutionFailed => false
+        case x => sys.error(s"Unexpected ExecutionLog status to write in database: $x")
+    }
 
 
     implicit val JsonMeta: Meta[Json] = Meta[String].imap(
@@ -136,7 +136,6 @@ private[cuttle] object Database {
         FC.setAutoCommit(true) *> p <* FC.setAutoCommit(false)
 
 
-
     private def lockedTransactor(xa: Transactor[IO], releaseIO: IO[Unit]): Transactor[IO] = {
         val guid = java.util.UUID.randomUUID.toString
 
@@ -169,50 +168,50 @@ private[cuttle] object Database {
         """.update.run.transact(xa).unsafeRunSync
         })
 
-    // Refresh our lock every minute (and check that we still are the lock owner)
-    ThreadPools
-      .newScheduledThreadPool(1, poolName = Some("DatabaseLock"))
-      .scheduleAtFixedRate(
-        new Runnable {
-          def run =
-            if ((sql"""
+        // Refresh our lock every minute (and check that we still are the lock owner)
+        ThreadPools
+            .newScheduledThreadPool(1, poolName = Some("DatabaseLock"))
+            .scheduleAtFixedRate(
+                new Runnable {
+                    def run =
+                        if ((sql"""
             UPDATE locks SET locked_at = NOW() WHERE locked_by = ${guid}
           """.update.run.transact(xa).unsafeRunSync: Int) != 1) {
-              releaseIO.unsafeRunSync()
-              sys.error(s"Lock has been lost, shutting down the database connection.")
-            }
-        },
-        1,
-        1,
-        TimeUnit.MINUTES
-      )
+                            releaseIO.unsafeRunSync()
+                            sys.error(s"Lock has been lost, shutting down the database connection.")
+                        }
+                },
+                1,
+                1,
+                TimeUnit.MINUTES
+            )
 
-    // We can now use the transactor safely
-    xa
-  }
+        // We can now use the transactor safely
+        xa
+    }
 
     private[cuttle] val doSchemaUpdates = utils.updateSchema("schema_evolutions", schemaEvolutions)
 
     private val connections = collection.concurrent.TrieMap.empty[DatabaseConfig, XA]
 
     private[cuttle] def newHikariTransactor(dbConfig: DatabaseConfig): Resource[IO, HikariTransactor[IO]] = {
-    import com.criteo.cuttle.ThreadPools.Implicits.doobieContextShift
+        import com.criteo.cuttle.ThreadPools.Implicits.doobieContextShift
 
         val locationString = dbConfig.locations.map(dbLocation => s"${dbLocation.host}:${dbLocation.port}").mkString(",")
         val jdbcString = s"jdbc:postgresql://$locationString/${dbConfig.database}"
 
         for {
-      connectThreadPool <- ThreadPools.doobieConnectThreadPoolResource
-      transactThreadPool <- ThreadPools.doobieTransactThreadPoolResource
+            connectThreadPool <- ThreadPools.doobieConnectThreadPoolResource
+            transactThreadPool <- ThreadPools.doobieTransactThreadPoolResource
             transactor <- HikariTransactor.newHikariTransactor[IO](
-            "org.postgresql.Driver",
-            jdbcString,
-            dbConfig.username,
-            dbConfig.password,
-        connectThreadPool,
-            transactThreadPool
-      )
-    } yield transactor
+                "org.postgresql.Driver",
+                jdbcString,
+                dbConfig.username,
+                dbConfig.password,
+                connectThreadPool,
+                transactThreadPool
+            )
+        } yield transactor
     }
 
     // we remove all created Hikari transactors here,
@@ -221,16 +220,19 @@ private[cuttle] object Database {
         connections.clear()
 
     def connect(dbConfig: DatabaseConfig): XA = {
-    // FIXME we shouldn't use allocated as it's unsafe instead we have to flatMap on the Resource[HikariTransactor]
-    val (transactor, releaseIO) = newHikariTransactor(dbConfig).allocated.unsafeRunSync
-    logger.debug("Allocated new Hikari transactor")connections.getOrElseUpdate(
-        dbConfig, {
-            val xa = lockedTransactor(transactor, releaseIO)
-        logger.debug("Lock transactor")
-            doSchemaUpdates.transact(xa).unsafeRunSync
-            logger.debug("Update Cuttle Schema")xa
-        }
-    )}
+        // FIXME we shouldn't use allocated as it's unsafe instead we have to flatMap on the Resource[HikariTransactor]
+        val (transactor, releaseIO) = newHikariTransactor(dbConfig).allocated.unsafeRunSync
+        logger.debug("Allocated new Hikari transactor")
+        connections.getOrElseUpdate(
+            dbConfig, {
+                val xa = lockedTransactor(transactor, releaseIO)
+                logger.debug("Lock transactor")
+                doSchemaUpdates.transact(xa).unsafeRunSync
+                logger.debug("Update Cuttle Schema")
+                xa
+            }
+        )
+    }
 }
 
 private[cuttle] trait Queries {
@@ -254,81 +256,82 @@ private[cuttle] trait Queries {
             .unique
 
     private[cuttle] def orderBy(
-                        sort: String,
-                        asc: Boolean) = (sort, asc) match {
-            case ("context", true) => fr"ORDER BY context_id ASC, job, id"
-            case ("context", false) => fr"ORDER BY context_id DESC, job, id"
-            case ("job", true) => fr"ORDER BY job ASC, context_id, id"
-            case ("job", false) => fr"ORDER BY job DESC, context_id, id"
-            case ("status", true) => fr"ORDER BY success ASC, context_id, job, id"
-            case ("status", false) => fr"ORDER BY success DESC, context_id, job, id"
-            case ("startTime", true) => fr"ORDER BY start_time ASC, id"
-            case ("startTime", false) => fr"ORDER BY start_time DESC, id"
-            case (_, true) => fr"ORDER BY end_time ASC, id"
-            case _ => fr"ORDER BY end_time DESC, id"
-        }
+                                   sort: String,
+                                   asc: Boolean) = (sort, asc) match {
+        case ("context", true) => fr"ORDER BY context_id ASC, job, id"
+        case ("context", false) => fr"ORDER BY context_id DESC, job, id"
+        case ("job", true) => fr"ORDER BY job ASC, context_id, id"
+        case ("job", false) => fr"ORDER BY job DESC, context_id, id"
+        case ("status", true) => fr"ORDER BY success ASC, context_id, job, id"
+        case ("status", false) => fr"ORDER BY success DESC, context_id, job, id"
+        case ("startTime", true) => fr"ORDER BY start_time ASC, id"
+        case ("startTime", false) => fr"ORDER BY start_time DESC, id"
+        case (_, true) => fr"ORDER BY end_time ASC, id"
+        case _ => fr"ORDER BY end_time DESC, id"
+    }
 
-  private[cuttle] def whereJobIn(jobs: Set[String]) =
-    if (jobs.isEmpty)
-      Fragment.empty
-    else
-       Fragments.in(
-            fr"WHEREjob",
-            NonEmptyList.fromListUnsafe(jobs.toList)) private[cuttle] def pagination(limit: Int, offset: Int) = fr"LIMIT $limit OFFSET $offset"
+    private[cuttle] def whereJobIn(jobs: Set[String]) =
+        if (jobs.isEmpty)
+            Fragment.empty
+        else
+            Fragments.in(fr"WHERE job", NonEmptyList.fromListUnsafe(jobs.toList))
 
-  private def query(sql: Fragment) =
-    sql
+    private[cuttle] def pagination(limit: Int, offset: Int) = fr"LIMIT $limit OFFSET $offset"
+
+    private def query(sql: Fragment) =
+        sql
             .query[(String, String, Instant, Instant, Json, ExecutionStatus, Int)]
             .to[List]
             .map(_.map {
                 case (id, job, startTime, endTime, context, status, waitingSeconds) =>
                     ExecutionLog(id, job, Some(startTime), Some(endTime), context, status, waitingSeconds = waitingSeconds)
             })
-  def getExecutionLog(contextQuery: Fragment,
-                      jobs: Set[String],
-                      sort: String,
-                      asc: Boolean,
-                      offset: Int,
-                      limit: Int): ConnectionIO[List[ExecutionLog]] = {
-    val select =
-      fr"""
+
+    def getExecutionLog(contextQuery: Fragment,
+                        jobs: Set[String],
+                        sort: String,
+                        asc: Boolean,
+                        offset: Int,
+                        limit: Int): ConnectionIO[List[ExecutionLog]] = {
+        val select =
+            fr"""
         SELECT executions.id, job, start_time, end_time, contexts.json AS context, success, executions.waiting_seconds
         FROM executions
       """
 
-    val context = fr"INNER JOIN (" ++ contextQuery ++ fr") contexts ON executions.context_id = contexts.id"
+        val context = fr"INNER JOIN (" ++ contextQuery ++ fr") contexts ON executions.context_id = contexts.id"
 
-    val finalQuery =
-      select ++
-        context ++
-        whereJobIn(jobs) ++
-        orderBy(sort, asc) ++
-        pagination(limit, offset)
+        val finalQuery =
+            select ++
+                context ++
+                whereJobIn(jobs) ++
+                orderBy(sort, asc) ++
+                pagination(limit, offset)
 
-    query(finalQuery)
-  }
+        query(finalQuery)
+    }
 
-  /**
-    * Used to query archived executions without a context.
-    */
-  def getRawExecutionLog(jobs: Set[String],
-                         sort: String,
-                         asc: Boolean,
-                         offset: Int,
-                         limit: Int): ConnectionIO[List[ExecutionLog]] = {
-    val select =
-      fr"""
+    /**
+      * Used to query archived executions without a context.
+      */
+    def getRawExecutionLog(jobs: Set[String],
+                           sort: String,
+                           asc: Boolean,
+                           offset: Int,
+                           limit: Int): ConnectionIO[List[ExecutionLog]] = {
+        val select =
+            fr"""
         SELECT id, job, start_time, end_time, context_id AS context, success, executions.waiting_seconds
         FROM executions
       """
-    val finalQuery =
-      select ++
-        whereJobIn(jobs) ++
-        orderBy(sort, asc) ++
-        pagination(limit, offset)
+        val finalQuery =
+            select ++
+                whereJobIn(jobs) ++
+                orderBy(sort, asc) ++
+                pagination(limit, offset)
 
-    query(finalQuery)
-  }
+        query(finalQuery)
+    }
 
     def getExecutionById(contextQuery: Fragment, id: String): ConnectionIO[Option[ExecutionLog]] =
         (sql"""
@@ -407,8 +410,8 @@ private[cuttle] trait Queries {
 }
 
 object Queries {
-  val getAllContexts: Fragment =
-    (sql"""
+    val getAllContexts: Fragment =
+        (sql"""
       SELECT context_id as id, context_id as json FROM executions
     """)
 }

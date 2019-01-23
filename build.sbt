@@ -1,7 +1,7 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.5.2-postgres"
+val VERSION = "0.5.2-SNAPSHOT"
 
 val mavenRelease = MavenRepository("maven-releases", "https://nexus.ism-dev.naumen.ru/repository/maven-releases/")
 val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.naumen.ru/repository/maven-snapshots/")
