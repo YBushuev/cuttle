@@ -65,6 +65,14 @@ object RetryStrategy {
     def retryWindow =
       Duration.ofMinutes(5)
   }
+
+  /** Simple retry strategy. Retry after the constant retry window.
+    * @param duration Duration of a retry window.
+    */
+  def SimpleRetryStategy(duration: scala.concurrent.duration.Duration) = new RetryStrategy {
+    def retryWindow: Duration = Duration.ofNanos(duration.toNanos)
+    def apply[S <: Scheduling](job: Job[S], ctx: S#Context, previouslyFailing: List[String]): Duration = retryWindow
+  }
 }
 
 private[cuttle] sealed trait ExecutionStatus
@@ -167,6 +175,12 @@ private[cuttle] case class PausedJobWithExecutions[S <: Scheduling](id: String,
 private[cuttle] case class PausedJob(id: String, user: User, date: Instant) {
   def toPausedJobWithExecutions[S <: Scheduling](): PausedJobWithExecutions[S] =
     PausedJobWithExecutions(id, user, date, Map.empty[Execution[S], Promise[Completed]])
+}
+
+private[cuttle] object PausedJob {
+  import io.circe.generic.semiauto._
+  implicit val encodeUser: Encoder[User] = deriveEncoder
+  implicit val encodePausedJob: Encoder[PausedJob] = deriveEncoder
 }
 
 /** [[Execution Executions]] are created by the [[Scheduler]].
@@ -450,10 +464,9 @@ class Executor[S <: Scheduling] private[cuttle] (val platforms: Seq[ExecutionPla
     }
 
   private def startMonitoringExecutions() = {
-    val SC = utils.createScheduler("com.criteo.cuttle.platforms.ExecutionMonitor.SC")
-
     val intervalSeconds = 1
-    SC.awakeEvery[IO](intervalSeconds.second)
+    utils
+      .awakeEvery(intervalSeconds.seconds)
       .map(_ => {
         runningExecutions
           .filter({ case (_, s) => s == ExecutionStatus.ExecutionWaiting })
@@ -575,6 +588,17 @@ class Executor[S <: Scheduling] private[cuttle] (val platforms: Seq[ExecutionPla
                                          limit: Int,
                                          xa: XA): IO[Seq[ExecutionLog]] =
     queries.getExecutionLog(queryContexts, jobs, sort, asc, offset, limit).transact(xa)
+
+  /**
+    * Used to query archived executions without a context.
+    */
+  private[cuttle] def rawArchivedExecutions(jobs: Set[String],
+                                            sort: String,
+                                            asc: Boolean,
+                                            offset: Int,
+                                            limit: Int,
+                                            xa: XA): IO[Seq[ExecutionLog]] =
+    queries.getRawExecutionLog(jobs, sort, asc, offset, limit).transact(xa)
 
   private[cuttle] def cancelExecution(executionId: String)(implicit user: User): Unit = {
     val toCancel = atomic { implicit tx =>
@@ -755,7 +779,10 @@ class Executor[S <: Scheduling] private[cuttle] (val platforms: Seq[ExecutionPla
                   val nextExecutionId = utils.randomUUID
 
                   val streams = new ExecutionStreams {
-                    def writeln(str: CharSequence) = ExecutionStreams.writeln(nextExecutionId, str)
+                    def writeln(str: CharSequence) = {
+                      ExecutionStreams.writeln(nextExecutionId, str)
+                      logger.debug(s"[$nextExecutionId] $str")
+                    }
                   }
 
                   // wrap the execution context so that we can register the name of the thread of each

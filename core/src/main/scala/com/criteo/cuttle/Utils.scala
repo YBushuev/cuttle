@@ -5,14 +5,17 @@ import java.util.concurrent.TimeUnit
 import java.lang.management.ManagementFactory
 import java.time.Instant
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.concurrent.{ExecutionContext, Future, Promise}
-
+import cats.effect.{IO, Resource}
+import cats.Eq
 import cats.implicits._
-import cats.effect.IO
 import doobie._
+import doobie.hikari.HikariTransactor
 import doobie.implicits._
-import lol.http.{PartialService, Service}
+import io.circe.Json
+import lol.http.{PartialService, ServerSentEvents, Service}
+import lol.http._
 
 /** A set of basic utilities useful to write workflows. */
 package object utils {
@@ -21,7 +24,7 @@ package object utils {
     *
     * @param config Database configuration
     */
-  def transactor(config: DatabaseConfig): XA = Database.newHikariTransactor(config)
+  def transactor(config: DatabaseConfig): Resource[IO, HikariTransactor[IO]] = Database.newHikariTransactor(config)
 
   /** Executes unapplied schema evolutions
     *
@@ -51,8 +54,14 @@ package object utils {
       }
     } yield ())
 
-  private[cuttle] def createScheduler(threadPrefix: String): fs2.Scheduler =
-    fs2.Scheduler.allocate[IO](1, daemon = true, threadPrefix, exitJvmOnFatalError = false).unsafeRunSync._1
+  private[cuttle] implicit val timer: cats.effect.Timer[IO] = {
+    val timerThreadPool = ThreadPools.newFixedThreadPool(1, poolName = Some("Timer"))
+    IO.timer(ExecutionContext.fromExecutorService(timerThreadPool))
+  }
+
+  // FIXME this method only exists because Scala couldn't resolve implicits in the context of Executor.scala
+  private[cuttle] def awakeEvery(duration: FiniteDuration): fs2.Stream[IO, FiniteDuration] =
+    fs2.Stream.awakeEvery[IO](duration)
 
   /** Creates a  [[scala.concurrent.Future Future]] that resolve automatically
     * after the given duration.
@@ -68,11 +77,31 @@ package object utils {
     def apply(timeout: Duration): Future[Unit] = {
       val p = Promise[Unit]()
       scheduler.schedule(
-        new Runnable { def run(): Unit = p.success(()) },
+        new Runnable {
+          def run(): Unit = p.success(())
+        },
         timeout.toMillis,
         TimeUnit.MILLISECONDS
       )
       p.future
+    }
+
+    /**
+      * Creates a [[cats.effect.IO]] that resolve automatically
+      * after the given duration.
+      * @param timeout Duration for the timeout.
+      * @return
+      */
+    def applyF(timeout: Duration): IO[Unit] = IO.async { cb =>
+      val runnable = new Runnable {
+        def run(): Unit = cb(Right(()))
+      }
+
+      scheduler.schedule(
+        runnable,
+        timeout.length,
+        timeout.unit
+      )
     }
   }
 
@@ -100,4 +129,25 @@ package object utils {
   }
 
   private[cuttle] def getJVMUptime = ManagementFactory.getRuntimeMXBean.getUptime / 1000
+
+  private[cuttle] def sse[A](thunk: IO[Option[A]], encode: A => IO[Json])(
+    implicit eqInstance: Eq[A]): lol.http.Response = {
+    import scala.concurrent.duration._
+    import io.circe._
+    import lol.json._
+    import fs2.Stream
+    import com.criteo.cuttle.ThreadPools.Implicits.serverContextShift
+
+    val stream = (Stream.emit(()) ++ Stream.fixedRate[IO](1.seconds))
+      .evalMap[IO, Option[A]](_ => IO.shift.flatMap(_ => thunk))
+      .flatMap({
+        case Some(x) => Stream(x)
+        case None    => Stream.raiseError[IO](new RuntimeException("Could not get result to stream"))
+      })
+      .changes
+      .evalMap[IO, Json](r => encode(r))
+      .map(ServerSentEvents.Event(_))
+
+    Ok(stream)
+  }
 }
