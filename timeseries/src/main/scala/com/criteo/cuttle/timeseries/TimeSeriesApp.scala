@@ -4,47 +4,30 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 
-import cats.Eq
+import scala.util._
+
 import cats.effect.IO
 import cats.implicits._
-import com.criteo.cuttle.Auth._
-import com.criteo.cuttle.ExecutionStatus._
-import com.criteo.cuttle.Metrics.{Gauge, Prometheus}
-import com.criteo.cuttle.ThreadPools.Implicits.serverThreadPool
-import com.criteo.cuttle.ThreadPools._
-import com.criteo.cuttle._
-import com.criteo.cuttle.events.JobSuccessForced
-import com.criteo.cuttle.timeseries.TimeSeriesUtils._
-import com.criteo.cuttle.timeseries.intervals.Bound.{Bottom, Finite, Top}
-import com.criteo.cuttle.timeseries.intervals._
-import com.criteo.cuttle.utils.{createScheduler, getJVMUptime}
 import doobie.implicits._
-import fs2.Stream
 import io.circe._
 import io.circe.generic.auto._
+import io.circe.java8.time._
 import io.circe.syntax._
 import lol.http._
 import lol.json._
 
-import scala.concurrent.duration._
-import scala.util._
+import com.criteo.cuttle.Auth._
+import com.criteo.cuttle.ExecutionStatus._
+import com.criteo.cuttle.Metrics.{Gauge, Prometheus}
+import com.criteo.cuttle._
+import com.criteo.cuttle.utils.getJVMUptime
+import com.criteo.cuttle.events.JobSuccessForced
+import com.criteo.cuttle.timeseries.TimeSeriesUtils._
+import com.criteo.cuttle.timeseries.intervals.Bound.{Bottom, Finite, Top}
+import com.criteo.cuttle.timeseries.intervals._
+import com.criteo.cuttle.utils.sse
 
 private[timeseries] object TimeSeriesApp {
-  private val SC = createScheduler("com.criteo.cuttle.App.SC")
-
-  def sse[A](thunk: IO[Option[A]], encode: A => IO[Json])(implicit eqInstance: Eq[A]): lol.http.Response = {
-    val stream = (Stream.emit(()) ++ SC.fixedRate[IO](1.second))
-      .evalMap(_ => IO.shift.flatMap(_ => thunk))
-      .flatMap({
-        case Some(x) => Stream(x)
-        case None    => Stream.raiseError(new RuntimeException("Could not get result to stream"))
-      })
-      .changes
-      .evalMap(r => encode(r))
-      .map(ServerSentEvents.Event(_))
-
-    Ok(stream)
-  }
 
   implicit def projectEncoder = new Encoder[CuttleProject] {
     override def apply(project: CuttleProject) =
@@ -100,17 +83,15 @@ private[timeseries] object TimeSeriesApp {
         .asJson
   }
 
-  import io.circe.generic.semiauto._
-  implicit val encodeUser: Encoder[User] = deriveEncoder
-  implicit val encodePausedJob: Encoder[PausedJob] = deriveEncoder
 }
 
 private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: Executor[TimeSeries], xa: XA) {
 
+  import project.{jobs, scheduler}
+
   import JobState._
   import TimeSeriesApp._
   import TimeSeriesCalendar._
-  import project.{jobs, scheduler}
 
   private val allIds = jobs.all.map(_.id)
 
@@ -184,6 +165,7 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
       Ok(Prometheus.serialize(metrics))
 
     case GET at url"/api/executions/status/$kind?limit=$l&offset=$o&events=$events&sort=$sort&order=$order&jobs=$jobs" =>
+      logger.debug(s"Retreiving $kind executions with sse mode $events")
       val jobIds = parseJobIds(jobs)
       val limit = Try(l.toInt).toOption.getOrElse(25)
       val offset = Try(o.toInt).toOption.getOrElse(0)
@@ -525,10 +507,11 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
           }
 
         val pausedJobs = scheduler.pausedJobs().map(_.id)
-        val allFailing = executor.allFailingExecutions
-        val allWaitingIds = executor.allRunning
+        val allFailingExecutionIds = executor.allFailingExecutions.map(_.id).toSet
+        val allWaitingExecutionIds = executor.allRunning
           .filter(_.status == ExecutionWaiting)
           .map(_.id)
+          .toSet
 
         def findAggregationLevel(n: Int,
                                  calendarView: TimeSeriesCalendarView,
@@ -567,15 +550,15 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
 
         def getStatusLabelFromState(jobState: JobState, job: Job[TimeSeries]): String =
           jobState match {
-            case Running(e) =>
-              if (allFailing.exists(_.id == e))
+            case Running(executionId) =>
+              if (allFailingExecutionIds.contains(executionId))
                 "failed"
-              else if (allWaitingIds.contains(e))
+              else if (allWaitingExecutionIds.contains(executionId))
                 "waiting"
               else if (pausedJobs.contains(job.id))
                 "paused"
               else "running"
-            case Todo(_) => "todo"
+            case Todo(_) => if (pausedJobs.contains(job.id)) "paused" else "todo"
             case Done(_) => "successful"
           }
 
@@ -586,7 +569,7 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
               TimeSeriesCalendarView(job.scheduling.calendar),
               period
             )
-            val jobExecutions = for {
+            val jobExecutions: List[Option[ExecutionPeriod]] = for {
               (interval, jobStatesOnIntervals) <- aggregateExecutions(job, period, calendarView)
             } yield {
               val inBackfill = backfills.exists(
@@ -596,7 +579,7 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
                       .intersect(Interval(bf.start, bf.end))
                       .toList
                       .nonEmpty)
-              if (calendarView.aggregationFactor == 1)
+              if (calendarView.aggregationFactor == 1) {
                 jobStatesOnIntervals match {
                   case (_, state) :: Nil =>
                     Some(
@@ -605,20 +588,24 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
                                    inBackfill,
                                    getVersionFromState(state)))
                   case _ => None
-                } else
+                }
+              } else {
                 jobStatesOnIntervals match {
-                  case l if l.nonEmpty => {
-                    val (duration, done, error) = l.foldLeft((0L, 0L, false))((acc, currentExecution) => {
-                      val (lo, hi) = currentExecution._1.toPair
-                      val jobStatus = getStatusLabelFromState(currentExecution._2, job)
-                      (acc._1 + lo.until(hi, ChronoUnit.SECONDS),
-                       acc._2 + (if (jobStatus == "successful") lo.until(hi, ChronoUnit.SECONDS) else 0),
-                       acc._3 || jobStatus == "failed")
-                    })
+                  case jobStates: List[(Interval[Instant], JobState)] if jobStates.nonEmpty => {
+                    val (duration, done, error) = jobStates.foldLeft((0L, 0L, false)) {
+                      case ((accumulatedDuration, accumulatedDoneDuration, hasErrors), (period, jobState)) =>
+                        val (lo, hi) = period.toPair
+                        val jobStatus = getStatusLabelFromState(jobState, job)
+                        (accumulatedDuration + lo.until(hi, ChronoUnit.SECONDS),
+                         accumulatedDoneDuration + (if (jobStatus == "successful") lo.until(hi, ChronoUnit.SECONDS)
+                                                    else 0),
+                         hasErrors || jobStatus == "failed")
+                    }
                     Some(AggregatedJobExecution(interval, done.toDouble / duration.toDouble, error, inBackfill))
                   }
                   case Nil => None
                 }
+              }
             }
             JobTimeline(job.id, calendarView, jobExecutions.flatten)
           }).toList
@@ -632,25 +619,40 @@ private[timeseries] case class TimeSeriesApp(project: CuttleProject, executor: E
             .flatMap {
               case (lo, hi) =>
                 val isInbackfill = backfillDomain.intersect(Interval(lo, hi)).toList.nonEmpty
-                val jobSummaries = for {
+
+                case class JobSummary(periodLengthInSeconds: Long, periodDoneInSeconds: Long, hasErrors: Boolean)
+
+                val jobSummaries: Set[JobSummary] = for {
                   job <- project.jobs.all
                   if filteredJobs.contains(job.id)
                   (interval, jobState) <- jobStates(job).intersect(Interval(lo, hi)).toList
                 } yield {
                   val (lo, hi) = interval.toPair
-                  (lo.until(hi, ChronoUnit.SECONDS), jobState match {
-                    case Done(_) => lo.until(hi, ChronoUnit.SECONDS)
-                    case _       => 0
-                  }, jobState match {
-                    case Running(e) => allFailing.exists(_.id == e)
-                    case _          => false
-                  })
+                  JobSummary(
+                    periodLengthInSeconds = lo.until(hi, ChronoUnit.SECONDS),
+                    periodDoneInSeconds = jobState match {
+                      case Done(_) => lo.until(hi, ChronoUnit.SECONDS)
+                      case _       => 0
+                    },
+                    hasErrors = jobState match {
+                      case Running(executionId) => allFailingExecutionIds.contains(executionId)
+                      case _                    => false
+                    }
+                  )
                 }
                 if (jobSummaries.nonEmpty) {
-                  val (duration, done, failing) = jobSummaries
-                    .reduce((a, b) => (a._1 + b._1, a._2 + b._2, a._3 || b._3))
+                  val aggregatedJobSummary = jobSummaries.reduce { (a: JobSummary, b: JobSummary) =>
+                    JobSummary(a.periodLengthInSeconds + b.periodLengthInSeconds,
+                               a.periodDoneInSeconds + b.periodDoneInSeconds,
+                               a.hasErrors || b.hasErrors)
+                  }
                   Some(
-                    AggregatedJobExecution(Interval(lo, hi), done.toDouble / duration.toDouble, failing, isInbackfill)
+                    AggregatedJobExecution(
+                      Interval(lo, hi),
+                      aggregatedJobSummary.periodDoneInSeconds.toDouble / aggregatedJobSummary.periodLengthInSeconds.toDouble,
+                      aggregatedJobSummary.hasErrors,
+                      isInbackfill
+                    )
                   )
                 } else {
                   None

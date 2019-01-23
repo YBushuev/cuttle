@@ -16,7 +16,6 @@ import scala.math.Ordering.Implicits._
 import cats._
 import cats.effect.IO
 import cats.implicits._
-import cats.mtl.implicits._
 import de.sciss.fingertree.RangedSeq
 import doobie._
 import doobie.implicits._
@@ -247,9 +246,9 @@ case class TimeSeriesContext(start: Instant,
   }
 }
 
-private[timeseries] object TimeSeriesContext {
-  implicit val encoder: Encoder[TimeSeriesContext] = deriveEncoder
-  implicit def decoder(implicit jobs: Set[Job[TimeSeries]]): Decoder[TimeSeriesContext] =
+object TimeSeriesContext {
+  private[timeseries] implicit val encoder: Encoder[TimeSeriesContext] = deriveEncoder
+  private[timeseries] implicit def decoder(implicit jobs: Set[Job[TimeSeries]]): Decoder[TimeSeriesContext] =
     deriveDecoder
 
   /** Provide an implicit `Ordering` for [[TimeSeriesContext]] based on the `compareTo` function. */

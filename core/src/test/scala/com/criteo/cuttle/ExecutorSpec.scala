@@ -9,6 +9,7 @@ import org.mockito.Matchers._
 import org.mockito.Mockito._
 import org.scalatest.FunSuite
 import com.criteo.cuttle.ThreadPools.Implicits.sideEffectThreadPool
+import com.criteo.cuttle.ThreadPools.Implicits.sideEffectContextShift
 import com.criteo.cuttle.ThreadPools._
 import com.criteo.cuttle.Metrics.Prometheus
 
@@ -26,7 +27,7 @@ class ExecutorSpec extends FunSuite with TestScheduling {
 
     val testExecutor = new Executor[TestScheduling](
       Seq.empty,
-      xa = Transactor.fromConnection[IO](connection).copy(strategy0 = doobie.util.transactor.Strategy.void),
+      xa = Transactor.fromConnection[IO](connection, sideEffectThreadPool).copy(strategy0 = doobie.util.transactor.Strategy.void),
       logger,
       "project_name",
       "test_version"

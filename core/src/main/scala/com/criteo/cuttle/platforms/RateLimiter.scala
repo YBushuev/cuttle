@@ -1,20 +1,17 @@
 package com.criteo.cuttle.platforms
 
+import scala.concurrent.stm._
+import scala.concurrent.duration._
 import java.time._
 
-import cats.effect.IO
-import com.criteo.cuttle.utils
-import io.circe._
-import io.circe.syntax._
 import lol.http._
 import lol.json._
+import io.circe._
+import io.circe.syntax._
+import io.circe.java8.time._
+import cats.effect.IO
 
-import scala.concurrent.duration._
-import scala.concurrent.stm._
-
-private[cuttle] object RateLimiter {
-  private val SC = utils.createScheduler("com.criteo.cuttle.platforms.RateLimiter.SC")
-}
+import com.criteo.cuttle.utils.timer
 
 /**
   * An rate limiter pool backed by a priority queue. It rate limits the executions
@@ -30,10 +27,7 @@ class RateLimiter(tokens: Int, refillRateInMs: Int) extends WaitingExecutionQueu
   private val _tokens = Ref(tokens)
   private val _lastRefill = Ref(Instant.now)
 
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  RateLimiter.SC
-    .awakeEvery[IO](refillRateInMs.milliseconds)
+  fs2.Stream.awakeEvery[IO](refillRateInMs.milliseconds)
     .flatMap(_ => {
       atomic { implicit txn =>
         if (_tokens() < tokens) {

@@ -1,10 +1,15 @@
 val devMode = settingKey[Boolean]("Some build optimization are applied in devMode.")
 val writeClasspath = taskKey[File]("Write the project classpath to a file.")
 
-val VERSION = "0.4.7-postgres"
+val VERSION = "0.5.2-postgres"
 
 val mavenRelease = MavenRepository("maven-releases", "https://nexus.ism-dev.naumen.ru/repository/maven-releases/")
 val mavenSnapshot = MavenRepository("maven-snapshots", "https://nexus.ism-dev.naumen.ru/repository/maven-snapshots/")
+
+lazy val catsCore = "1.5.0"
+lazy val circe = "0.10.1"
+lazy val doobie = "0.6.0"
+lazy val lolhttp = "0.12.0"
 
 lazy val commonSettings = Seq(
   organization := "com.naumen.sibi.cuttle",
@@ -160,8 +165,6 @@ def removeDependencies(groups: String*)(xml: scala.xml.Node) = {
 }
 
 
-val doobieVersion = "0.5.3"
-
 lazy val cuttle =
   (project in file("core"))
     .configs(IntegrationTest)
@@ -172,27 +175,25 @@ lazy val cuttle =
         "com.criteo.lolhttp" %% "lolhttp",
         "com.criteo.lolhttp" %% "loljson",
         "com.criteo.lolhttp" %% "lolhtml"
-      ).map(_ % "10.0.0"),
-      libraryDependencies ++= Seq("core", "generic", "parser")
-        .map(module => "io.circe" %% s"circe-${module}" % "0.10.1"),
+      ).map(_ % lolhttp),
+      libraryDependencies ++= Seq("core", "generic", "parser", "java8")
+        .map(module => "io.circe" %% s"circe-$module" % circe),
       libraryDependencies ++= Seq(
         "de.sciss" %% "fingertree" % "1.5.2",
-        "org.scala-stm" %% "scala-stm" % "0.9",
+        "org.scala-stm" %% "scala-stm" % "0.8",
         "org.scala-lang" % "scala-reflect" % scalaVersion.value,
-        "org.typelevel" %% "cats-core" % "1.5.0",
-        "org.typelevel" %% "cats-mtl-core" % "0.3.0",
+        "org.typelevel" %% "cats-core" % catsCore,
         "codes.reactive" %% "scala-time" % "0.4.1",
-        "com.zaxxer" % "nuprocess" % "1.2.4"
+        "com.zaxxer" % "nuprocess" % "1.1.0"
       ),
       libraryDependencies ++= Seq(
         "org.tpolecat" %% "doobie-core",
-        "org.tpolecat" %% "doobie-hikari",
-        "org.tpolecat" %% "doobie-postgres"
-      ).map(_ % doobieVersion),
+        "org.tpolecat" %% "doobie-hikari"
+      ).map(_ % doobie),
       libraryDependencies ++= Seq(
-        "org.scalatest" %% "scalatest" % "3.0.5",
+        "org.scalatest" %% "scalatest" % "3.0.1",
         "org.mockito" % "mockito-all" % "1.10.19",
-        "org.tpolecat" %% "doobie-scalatest" % doobieVersion
+        "org.tpolecat" %% "doobie-scalatest" % doobie
       ).map(_ % "it,test")
     )
 
@@ -237,6 +238,19 @@ lazy val timeseries =
     )
     .dependsOn(cuttle % "compile->compile;test->test")
 
+lazy val cron =
+  (project in file("cron"))
+    .configs(IntegrationTest)
+    .settings(commonSettings: _*)
+    .settings(Defaults.itSettings: _*)
+    .settings(
+      libraryDependencies += "com.github.alonsodomin.cron4s" %% "cron4s-core" % "0.4.5"
+    )
+    .settings(
+      fork in Test := true
+    )
+    .dependsOn(cuttle % "compile->compile;test->test;it->it")
+
 lazy val examples =
   (project in file("examples"))
     .settings(commonSettings: _*)
@@ -259,7 +273,7 @@ lazy val examples =
         ))
         .getOrElse(Nil): _*
     )
-    .dependsOn(cuttle, timeseries)
+    .dependsOn(cuttle, timeseries, cron)
 
 lazy val root =
   (project in file("."))
@@ -283,7 +297,8 @@ lazy val root =
       unidocAllAPIMappings in (ScalaUnidoc, unidoc) ++= {
         val allJars = {
           (fullClasspath in cuttle in Compile).value ++
-            (fullClasspath in timeseries in Compile).value
+            (fullClasspath in timeseries in Compile).value ++
+            (fullClasspath in cron in Compile).value
         }
         Seq(
           allJars
@@ -301,6 +316,6 @@ lazy val root =
             .toMap
         )
       },
-      unidocProjectFilter in (ScalaUnidoc, unidoc) := inProjects(cuttle, timeseries)
+      unidocProjectFilter in (ScalaUnidoc, unidoc) := inProjects(cuttle, timeseries, cron)
     )
-    .aggregate(cuttle, timeseries)
+    .aggregate(cuttle, timeseries, cron)
